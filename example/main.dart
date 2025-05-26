@@ -110,6 +110,8 @@ Future<void> main(List<String> argv) async {
       await _deleteVault(argv[1], force: args['yes']);
       break;
   }
+
+  exit(0); // otherwise the async calls can cause the process to hang
 }
 
 /*──────────────────  CREATE & UPDATE  ─────────────────*/
@@ -353,29 +355,43 @@ When asked a question:
     },
   ];
 
-  stdout.writeln(
-    '\n💬  Chat started. Type "exit" or "quit" to end the session.',
-  );
-  stdout.writeln('    Available commands:');
-  stdout.writeln('    • exit/quit - End the chat session');
-  stdout.writeln('    • debug - Toggle debug logging');
+  void showHelp() {
+    stdout.writeln('\n💬  Available commands:');
+    stdout.writeln('    /help   - Show this help message');
+    stdout.writeln('    /exit   - End the chat session');
+    stdout.writeln('    /quit   - End the chat session');
+    stdout.writeln('    /debug  - Toggle debug logging');
+  }
+
+  stdout.writeln('\n💬  Chat started. Type /help for available commands.');
+  showHelp();
 
   while (true) {
     stdout.write('\n🙋‍♂️  > ');
     final q = stdin.readLineSync()?.trim();
     if (q == null) continue;
 
-    if (q.toLowerCase() == 'exit' || q.toLowerCase() == 'quit') {
-      stdout.writeln('\n👋  Goodbye!');
-      break;
-    }
-
-    if (q.toLowerCase() == 'debug') {
-      _setupLogging(_logger.level == Level.OFF);
-      stdout.writeln(
-        '\n🔧  Debug logging ${_logger.level == Level.OFF ? "disabled" : "enabled"}',
-      );
-      continue;
+    if (q.startsWith('/')) {
+      final cmd = q.toLowerCase();
+      switch (cmd) {
+        case '/exit':
+        case '/quit':
+          stdout.writeln('\n👋  Goodbye!');
+          return;
+        case '/debug':
+          _setupLogging(_logger.level == Level.OFF);
+          stdout.writeln(
+            '\n🔧  Debug logging ${_logger.level == Level.OFF ? "disabled" : "enabled"}',
+          );
+          continue;
+        case '/help':
+          showHelp();
+          continue;
+        default:
+          stdout.writeln('\n❌  Unknown command: $cmd');
+          stdout.writeln('    Type /help for available commands');
+          continue;
+      }
     }
 
     msgs.add({'role': 'user', 'content': q});
