@@ -1,4 +1,3 @@
-// dart pub add args sqlite3 crypto vector_math openai_dart
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -10,7 +9,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 /*──────────────────────  CONFIG  ──────────────────────*/
 
-const openAiKey = String.fromEnvironment('OPENAI_API_KEY');
+final openAiKey = Platform.environment['OPENAI_API_KEY'] ?? '';
 const embedModel = 'text-embedding-3-small';
 const chatModel = 'gpt-4o-mini';
 
@@ -52,6 +51,7 @@ Future<void> main(List<String> argv) async {
     ..addFlag('update', negatable: false)
     ..addFlag('chat', negatable: false)
     ..addFlag('list', negatable: false)
+    ..addFlag('delete', negatable: false)
     ..addFlag('yes', negatable: false);
   final args = argp.parse(argv);
 
@@ -60,6 +60,7 @@ Future<void> main(List<String> argv) async {
     'update',
     'chat',
     'list',
+    'delete',
   ].where((m) => args[m]).toList();
   if (modes.length != 1) {
     stderr.writeln(
@@ -67,7 +68,8 @@ Future<void> main(List<String> argv) async {
       '  --create <name> <file|dir>   [--yes]\n'
       '  --update <name>\n'
       '  --chat   <name>\n'
-      '  --list   [name]',
+      '  --list   [name]\n'
+      '  --delete <name> [--yes]',
     );
     exit(64);
   }
@@ -87,6 +89,11 @@ Future<void> main(List<String> argv) async {
       break;
     case 'list':
       await _listVaults(argv.length > 1 ? argv[1] : null);
+      break;
+    case 'delete':
+      if (argv.length < 2) exit(64);
+      await _deleteVault(argv[1], force: args['yes']);
+      break;
   }
 }
 
@@ -130,6 +137,40 @@ Future<void> _updateVault(String name) async {
   await _syncVault(name, row['root_path'] as String);
 }
 
+/*────────────────────────  DELETE  ──────────────────────*/
+
+Future<void> _deleteVault(String name, {required bool force}) async {
+  final row = db.select('SELECT id FROM vaults WHERE name = ?', [
+    name,
+  ]).firstOrNull;
+  if (row == null) {
+    stderr.writeln('No vault named "$name".');
+    exit(1);
+  }
+
+  if (!force) {
+    stdout.write(
+      '⚠️  This will permanently delete vault "$name" and all its chunks.\n'
+      'Continue? (y/N) ',
+    );
+    final ans = stdin.readLineSync()?.trim().toLowerCase();
+    if (ans != 'y' && ans != 'yes') {
+      stdout.writeln('Aborted.');
+      exit(0);
+    }
+  }
+
+  final vaultId = row['id'] as int;
+
+  // Delete all chunks first (due to foreign key constraint)
+  db.execute('DELETE FROM chunks WHERE vault_id = ?', [vaultId]);
+
+  // Then delete the vault
+  db.execute('DELETE FROM vaults WHERE id = ?', [vaultId]);
+
+  print('Vault "$name" deleted.');
+}
+
 /*──────────────  INDEX / SYNC SHARED LOGIC  ───────────*/
 
 Future<void> _syncVault(String name, String root) async {
@@ -137,14 +178,27 @@ Future<void> _syncVault(String name, String root) async {
       db.select('SELECT id FROM vaults WHERE name = ?', [name]).first['id']
           as int;
 
+  stdout.write('Scanning files...\n');
   final disk = <String, String>{}; // hash -> text
-  for (final f in _walk(
+  final fileChunks = <String, List<String>>{}; // file -> chunks
+  final files = _walk(
     root,
-  ).whereType<File>().where((f) => f.path.endsWith('.md'))) {
-    for (final piece in _chunkText(await f.readAsString())) {
+  ).whereType<File>().where((f) => f.path.endsWith('.md')).toList();
+
+  for (var i = 0; i < files.length; i++) {
+    final f = files[i];
+    final relativePath = f.path
+        .replaceFirst(root, '')
+        .replaceFirst(RegExp(r'^/+'), '');
+    stdout.write('  (${i + 1}/${files.length}) $relativePath... ');
+    final chunks = _chunkText(await f.readAsString());
+    fileChunks[relativePath] = chunks;
+    for (final piece in chunks) {
       disk[sha256.convert(utf8.encode(piece)).toString()] = piece;
     }
+    stdout.writeln('${chunks.length} chunks');
   }
+  stdout.writeln('Scan complete.');
 
   final dbHashes = db
       .select('SELECT hash FROM chunks WHERE vault_id = ?', [vaultId])
@@ -152,16 +206,50 @@ Future<void> _syncVault(String name, String root) async {
       .toSet();
 
   int added = 0, deleted = 0;
+  final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
 
-  for (final entry in disk.entries) {
-    if (dbHashes.contains(entry.key)) continue;
-    final vec = await _embed(entry.value);
-    db.execute(
-      'INSERT INTO chunks (vault_id, hash, text, vec) VALUES (?,?,?,?)',
-      [vaultId, entry.key, entry.value, jsonEncode(vec)],
-    );
-    added++;
+  if (toAdd.isNotEmpty) {
+    stdout.write('\nEmbedding ${toAdd.length} chunks...\n');
+
+    // Create a map of hash -> file for each chunk
+    final chunkToFile = <String, String>{};
+    for (final entry in fileChunks.entries) {
+      for (final chunk in entry.value) {
+        chunkToFile[sha256.convert(utf8.encode(chunk)).toString()] = entry.key;
+      }
+    }
+
+    // Get all files that have chunks to add
+    final filesToProcess = <String>{};
+    for (final entry in toAdd) {
+      filesToProcess.add(chunkToFile[entry.key]!);
+    }
+    final uniqueFiles = filesToProcess.toList()..sort();
+
+    String? currentFile;
+    int currentFileIndex = 0;
+    for (final entry in toAdd) {
+      final file = chunkToFile[entry.key]!;
+      if (file != currentFile) {
+        if (currentFile != null) stdout.write('\n');
+        currentFileIndex = uniqueFiles.indexOf(file);
+        stdout.write(
+          '  (${currentFileIndex + 1}/${uniqueFiles.length}) $file... ',
+        );
+        currentFile = file;
+      }
+
+      final vec = await _embed(entry.value);
+      db.execute(
+        'INSERT INTO chunks (vault_id, hash, text, vec) VALUES (?,?,?,?)',
+        [vaultId, entry.key, entry.value, jsonEncode(vec)],
+      );
+      added++;
+      stdout.write('.');
+    }
+    stdout.writeln('\nEmbedding complete.');
   }
+
   for (final hash in dbHashes.difference(disk.keys.toSet())) {
     db.execute('DELETE FROM chunks WHERE hash = ? AND vault_id = ?', [
       hash,
@@ -169,7 +257,7 @@ Future<void> _syncVault(String name, String root) async {
     ]);
     deleted++;
   }
-  print('Vault "$name" sync  → added: $added  deleted: $deleted');
+  print('\nVault "$name" sync  → added: $added  deleted: $deleted');
 }
 
 /*────────────────────────  LIST  ──────────────────────*/
@@ -298,6 +386,104 @@ bool _vaultStale(int vaultId, String root) {
 
 /*──────────────────  UTILITIES  ──────────────────────*/
 
+// Rough estimate: 1 token ≈ 3 chars for English text (more conservative)
+int _estimateTokens(String text) {
+  return (text.length / 3).ceil();
+}
+
+List<String> _chunkText(String text) {
+  final sents = text.split(RegExp(r'(?<=[.?!])\s+'));
+  final out = <String>[];
+  final buf = StringBuffer();
+  int currentTokens = 0;
+  const maxTokens = 6000; // More conservative limit
+
+  for (final s in sents) {
+    final sentTokens = _estimateTokens(s);
+    if (currentTokens + sentTokens > maxTokens) {
+      if (buf.isNotEmpty) {
+        final chunk = buf.toString().trim();
+        // Safety check - if our estimate was wrong, split the chunk
+        if (_estimateTokens(chunk) > maxTokens) {
+          final words = chunk.split(RegExp(r'\s+'));
+          final wordBuf = StringBuffer();
+          int wordTokens = 0;
+          for (final word in words) {
+            final wordTokenCount = _estimateTokens(word);
+            if (wordTokens + wordTokenCount > maxTokens) {
+              if (wordBuf.isNotEmpty) {
+                out.add(wordBuf.toString().trim());
+                wordBuf.clear();
+                wordTokens = 0;
+              }
+            }
+            wordBuf.write('$word ');
+            wordTokens += wordTokenCount;
+          }
+          if (wordBuf.isNotEmpty) {
+            out.add(wordBuf.toString().trim());
+          }
+        } else {
+          out.add(chunk);
+        }
+        buf.clear();
+        currentTokens = 0;
+      }
+      // If a single sentence is too long, split it into smaller pieces
+      if (sentTokens > maxTokens) {
+        final words = s.split(RegExp(r'\s+'));
+        final wordBuf = StringBuffer();
+        int wordTokens = 0;
+        for (final word in words) {
+          final wordTokenCount = _estimateTokens(word);
+          if (wordTokens + wordTokenCount > maxTokens) {
+            if (wordBuf.isNotEmpty) {
+              out.add(wordBuf.toString().trim());
+              wordBuf.clear();
+              wordTokens = 0;
+            }
+          }
+          wordBuf.write('$word ');
+          wordTokens += wordTokenCount;
+        }
+        if (wordBuf.isNotEmpty) {
+          out.add(wordBuf.toString().trim());
+        }
+        continue;
+      }
+    }
+    buf.write('$s ');
+    currentTokens += sentTokens;
+  }
+  if (buf.isNotEmpty) {
+    final chunk = buf.toString().trim();
+    // Final safety check
+    if (_estimateTokens(chunk) > maxTokens) {
+      final words = chunk.split(RegExp(r'\s+'));
+      final wordBuf = StringBuffer();
+      int wordTokens = 0;
+      for (final word in words) {
+        final wordTokenCount = _estimateTokens(word);
+        if (wordTokens + wordTokenCount > maxTokens) {
+          if (wordBuf.isNotEmpty) {
+            out.add(wordBuf.toString().trim());
+            wordBuf.clear();
+            wordTokens = 0;
+          }
+        }
+        wordBuf.write('$word ');
+        wordTokens += wordTokenCount;
+      }
+      if (wordBuf.isNotEmpty) {
+        out.add(wordBuf.toString().trim());
+      }
+    } else {
+      out.add(chunk);
+    }
+  }
+  return out;
+}
+
 Iterable<FileSystemEntity> _walk(String start) sync* {
   final t = FileSystemEntity.typeSync(start);
   if (t == FileSystemEntityType.file) {
@@ -305,21 +491,6 @@ Iterable<FileSystemEntity> _walk(String start) sync* {
   } else if (t == FileSystemEntityType.directory) {
     yield* Directory(start).listSync(recursive: true, followLinks: false);
   }
-}
-
-List<String> _chunkText(String text) {
-  final sents = text.split(RegExp(r'(?<=[.?!])\s+'));
-  final out = <String>[];
-  final buf = StringBuffer();
-  for (final s in sents) {
-    buf.write('$s ');
-    if (buf.length > 500) {
-      out.add(buf.toString().trim());
-      buf.clear();
-    }
-  }
-  if (buf.isNotEmpty) out.add(buf.toString().trim());
-  return out;
 }
 
 Future<List<double>> _embed(String text) async {
