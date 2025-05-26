@@ -1,39 +1,107 @@
-<!-- 
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+# Ragamuffin
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages). 
-
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages). 
--->
-
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+A portable, developer-friendly RAG (Retrieval-Augmented Generation) tool for interrogating personal text files with LLM assistance, while minimizing cloud costs.
 
 ## Features
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+- 🔒 **Local Storage**: Stores embeddings in SQLite, only re-embedding on changes
+- 🎯 **Smart Retrieval**: LLM performs targeted retrieval through OpenAI function calls
+- 🚀 **Cross-Platform**: Runs identically on macOS, Windows, and Linux
+- 📝 **Scriptable**: Command-line interface with no server or browser UI required
+- ⚡ **Efficient**: Only incurs cloud costs for embedding and inference
 
-## Getting started
+## Installation
 
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/ragamuffin.git
+cd ragamuffin
+
+# Run directly with Dart
+dart run ragamuffin.dart [command]
+```
 
 ## Usage
 
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder. 
+### Create a Vault
 
-```dart
-const like = 'sample';
+```bash
+dart run ragamuffin.dart --create my-vault ~/Notes --yes
 ```
 
-## Additional information
+This will:
+- Create a new vault named "my-vault"
+- Scan the specified directory for markdown files
+- Embed all text chunks
+- Store vectors and text locally
 
-TODO: Tell users more about the package: where to find more information, how to 
-contribute to the package, how to file issues, what response they can expect 
-from the package authors, and more.
+### Update a Vault
+
+```bash
+dart run ragamuffin.dart --update my-vault
+```
+
+This will:
+- Add new chunks
+- Re-embed changed chunks
+- Delete vanished chunks
+- Print delta counts
+
+### Chat with Your Vault
+
+```bash
+dart run ragamuffin.dart --chat my-vault
+```
+
+This will:
+- Check for any changes in the vault
+- Warn if the vault is stale
+- Enter a REPL where you can chat with GPT-4
+- The LLM will automatically retrieve relevant chunks as needed
+
+### List Vaults
+
+```bash
+# List all vaults
+dart run ragamuffin.dart --list
+
+# List specific vault details
+dart run ragamuffin.dart --list my-vault
+```
+
+## Environment Setup
+
+Set your OpenAI API key:
+
+```bash
+export OPENAI_API_KEY=your_api_key_here
+```
+
+## Privacy & Security
+
+- You'll be warned once per vault that text will be sent to OpenAI
+- Only embeddings and plain text are stored locally
+- No API keys are stored in the database
+- Delete `ragamuffin.db` to wipe all vectors
+
+## Technical Details
+
+- Uses OpenAI's text-embedding-3-small (1536-dim) for embeddings
+- Uses GPT-4 with function-calling capabilities
+- Memory footprint < 300 MB during cosine search
+- Cold "create" for a 5 MB vault completes in under two minutes
+
+## Future Plans
+
+- Switchable embedding provider (Gemini compatibility)
+- ANN index (HNSW) for larger chunk counts
+- PDF chunker with text-position citations
+- Optional local LLM via llama_cpp for offline answers
+
+## License
+
+[Your chosen license]
+
+## Contributing
+
+[Your contribution guidelines]
