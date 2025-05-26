@@ -1,11 +1,11 @@
-// dart pub add http args sqlite3 crypto vector_math
+// dart pub add args sqlite3 crypto vector_math openai_dart
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:args/args.dart';
 import 'package:crypto/crypto.dart';
-import 'package:http/http.dart' as http;
+import 'package:openai_dart/openai_dart.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 /*──────────────────────  CONFIG  ──────────────────────*/
@@ -323,50 +323,102 @@ List<String> _chunkText(String text) {
 }
 
 Future<List<double>> _embed(String text) async {
-  final res = await http.post(
-    Uri.https('api.openai.com', '/v1/embeddings'),
-    headers: {
-      'Authorization': 'Bearer $openAiKey',
-      'Content-Type': 'application/json',
-    },
-    body: jsonEncode({'model': embedModel, 'input': text}),
+  final client = OpenAIClient(apiKey: openAiKey);
+  final response = await client.createEmbedding(
+    request: CreateEmbeddingRequest(
+      model: EmbeddingModel.model(EmbeddingModels.textEmbedding3Small),
+      input: EmbeddingInput.string(text),
+    ),
   );
-  return (jsonDecode(res.body)['data'][0]['embedding'] as List)
-      .cast<num>()
-      .map((n) => n.toDouble())
-      .toList();
+  return (response.data.first.embedding as EmbeddingVectorListDouble).value;
 }
 
-Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> msgs) async {
-  final body = {
-    'model': chatModel,
-    'messages': msgs,
-    'tools': [
-      {
-        'type': 'function',
-        'function': {
-          'name': 'retrieve_chunks',
-          'parameters': {
-            'type': 'object',
-            'properties': {
-              'query': {'type': 'string'},
+Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
+  final client = OpenAIClient(apiKey: openAiKey);
+  final response = await client.createChatCompletion(
+    request: CreateChatCompletionRequest(
+      model: ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
+      messages: messages.map((m) {
+        switch (m['role'] as String) {
+          case 'system':
+            return ChatCompletionMessage.system(
+              content: m['content'] as String,
+            );
+          case 'user':
+            return ChatCompletionMessage.user(
+              content: ChatCompletionUserMessageContent.string(
+                m['content'] as String,
+              ),
+            );
+          case 'assistant':
+            return ChatCompletionMessage.assistant(
+              content: m['content'] as String,
+            );
+          case 'tool':
+            return ChatCompletionMessage.tool(
+              content: m['content'] as String,
+              toolCallId: m['tool_call_id'] as String,
+            );
+          case 'function':
+            return ChatCompletionMessage.function(
+              content: m['content'] as String?,
+              name: m['name'] as String,
+            );
+          default:
+            throw ArgumentError('Unknown role: ${m['role']}');
+        }
+      }).toList(),
+      tools: [
+        ChatCompletionTool(
+          type: ChatCompletionToolType.function,
+          function: FunctionObject(
+            name: 'retrieve_chunks',
+            description: 'Search for documents in the vector store',
+            parameters: {
+              'type': 'object',
+              'properties': {
+                'query': {'type': 'string', 'description': 'The search query'},
+              },
+              'required': ['query'],
             },
-            'required': ['query'],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  final message = response.choices.first.message;
+  if (message.toolCalls != null && message.toolCalls!.isNotEmpty) {
+    final toolCall = message.toolCalls!.first;
+    return {
+      'choices': [
+        {
+          'message': {
+            'content': message.content,
+            'tool_calls': [
+              {
+                'id': toolCall.id,
+                'function': {
+                  'name': toolCall.function.name,
+                  'arguments': toolCall.function.arguments,
+                },
+              },
+            ],
           },
+          'finish_reason': 'tool_calls',
         },
+      ],
+    };
+  }
+
+  return {
+    'choices': [
+      {
+        'message': {'content': message.content},
+        'finish_reason': 'stop',
       },
     ],
-    'tool_choice': 'auto',
   };
-  final res = await http.post(
-    Uri.https('api.openai.com', '/v1/chat/completions'),
-    headers: {
-      'Authorization': 'Bearer $openAiKey',
-      'Content-Type': 'application/json',
-    },
-    body: jsonEncode(body),
-  );
-  return jsonDecode(res.body);
 }
 
 double _cosineSimilarity(List<double> a, List<double> b) {
