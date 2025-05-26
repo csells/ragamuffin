@@ -324,7 +324,7 @@ Future<void> _chatLoop(String name) async {
       )
       .toList(growable: false);
 
-  final msgs = [
+  final msgs = <Map<String, dynamic>>[
     {
       'role': 'system',
       'content':
@@ -338,31 +338,72 @@ Future<void> _chatLoop(String name) async {
     if (q == null || q.toLowerCase() == 'exit') break;
 
     msgs.add({'role': 'user', 'content': q});
+    print('\nDEBUG: Sending messages to API:');
+    for (var m in msgs) {
+      print('  ${jsonEncode(m)}');
+    }
+
     final reply = await _chat(msgs);
+    print('\nDEBUG: Received API response:');
+    print('  ${jsonEncode(reply)}');
+
     final choice = reply['choices'][0];
+    print('\nDEBUG: Processing choice:');
+    print('  ${jsonEncode(choice)}');
 
     if (choice['finish_reason'] == 'tool_calls') {
+      // Add the assistant's message with tool_calls
+      final assistantMsg = {
+        'role': 'assistant',
+        'content': choice['message']['content'],
+        'tool_calls': choice['message']['tool_calls'],
+      };
+      print('\nDEBUG: Adding assistant message:');
+      print('  ${jsonEncode(assistantMsg)}');
+      msgs.add(assistantMsg);
+
       final call = choice['message']['tool_calls'][0];
       final query =
           jsonDecode(call['function']['arguments'])['query'] as String;
       final vecQ = await _embed(query);
       final hits = _rank(chunks, vecQ, 4).map((c) => c.text).join('\n---\n');
 
-      msgs
-        ..add(choice['message'])
-        ..add({
-          'role': 'tool',
-          'tool_call_id': call['id'],
-          'name': 'retrieve_chunks',
-          'content': jsonEncode({'snippets': hits}),
-        });
+      // Add the tool's response
+      final toolMsg = {
+        'role': 'tool',
+        'tool_call_id': call['id'],
+        'content': jsonEncode({'snippets': hits}),
+      };
+      print('\nDEBUG: Adding tool message:');
+      print('  ${jsonEncode(toolMsg)}');
+      msgs.add(toolMsg);
 
+      // Get the final assistant response
+      print('\nDEBUG: Sending messages for final response:');
+      for (var m in msgs) {
+        print('  ${jsonEncode(m)}');
+      }
       final cont = await _chat(msgs);
+      print('\nDEBUG: Received final response:');
+      print('  ${jsonEncode(cont)}');
+
       print('\n🤖  ${cont['choices'][0]['message']['content']}');
-      msgs.add(cont['choices'][0]['message']);
+      final finalMsg = {
+        'role': 'assistant',
+        'content': cont['choices'][0]['message']['content'],
+      };
+      print('\nDEBUG: Adding final message:');
+      print('  ${jsonEncode(finalMsg)}');
+      msgs.add(finalMsg);
     } else {
       print('\n🤖  ${choice['message']['content']}');
-      msgs.add(choice['message']);
+      final msg = {
+        'role': 'assistant',
+        'content': choice['message']['content'],
+      };
+      print('\nDEBUG: Adding message:');
+      print('  ${jsonEncode(msg)}');
+      msgs.add(msg);
     }
   }
 }
@@ -506,37 +547,70 @@ Future<List<double>> _embed(String text) async {
 
 Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
   final client = OpenAIClient(apiKey: openAiKey);
+
+  // Debug logging
+  print('DEBUG: Messages to send:');
+  for (var m in messages) {
+    print(
+      '  Role: ${m['role']}, Content: ${m['content']}, Tool call ID: ${m['tool_call_id']}',
+    );
+  }
+
   final response = await client.createChatCompletion(
     request: CreateChatCompletionRequest(
       model: ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
       messages: messages.map((m) {
-        switch (m['role'] as String) {
+        final role = m['role'] as String;
+        final content = m['content'] as String?;
+        final toolCallId = m['tool_call_id'] as String?;
+        final name = m['name'] as String?;
+        final toolCalls = m['tool_calls'] as List<dynamic>?;
+
+        print(
+          'DEBUG: Processing message - Role: $role, Content: $content, Tool call ID: $toolCallId, Name: $name',
+        );
+
+        switch (role) {
           case 'system':
-            return ChatCompletionMessage.system(
-              content: m['content'] as String,
-            );
+            return ChatCompletionMessage.system(content: content ?? '');
           case 'user':
             return ChatCompletionMessage.user(
-              content: ChatCompletionUserMessageContent.string(
-                m['content'] as String,
-              ),
+              content: ChatCompletionUserMessageContent.string(content ?? ''),
             );
           case 'assistant':
-            return ChatCompletionMessage.assistant(
-              content: m['content'] as String,
-            );
+            if (toolCalls != null) {
+              return ChatCompletionMessage.assistant(
+                content: content ?? '',
+                toolCalls: toolCalls
+                    .map(
+                      (tc) => ChatCompletionMessageToolCall(
+                        id: tc['id'] as String,
+                        type: ChatCompletionMessageToolCallType.function,
+                        function: ChatCompletionMessageFunctionCall(
+                          name: tc['function']['name'] as String,
+                          arguments: tc['function']['arguments'] as String,
+                        ),
+                      ),
+                    )
+                    .toList(),
+              );
+            }
+            return ChatCompletionMessage.assistant(content: content ?? '');
           case 'tool':
+            if (toolCallId == null) {
+              throw ArgumentError('Tool message must have tool_call_id');
+            }
             return ChatCompletionMessage.tool(
-              content: m['content'] as String,
-              toolCallId: m['tool_call_id'] as String,
+              content: content ?? '',
+              toolCallId: toolCallId,
             );
           case 'function':
-            return ChatCompletionMessage.function(
-              content: m['content'] as String?,
-              name: m['name'] as String,
-            );
+            if (name == null) {
+              throw ArgumentError('Function message must have name');
+            }
+            return ChatCompletionMessage.function(content: content, name: name);
           default:
-            throw ArgumentError('Unknown role: ${m['role']}');
+            throw ArgumentError('Unknown role: $role');
         }
       }).toList(),
       tools: [
@@ -565,7 +639,8 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
       'choices': [
         {
           'message': {
-            'content': message.content,
+            'role': 'assistant',
+            'content': message.content ?? '',
             'tool_calls': [
               {
                 'id': toolCall.id,
@@ -585,7 +660,7 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
   return {
     'choices': [
       {
-        'message': {'content': message.content},
+        'message': {'content': message.content ?? '', 'role': 'assistant'},
         'finish_reason': 'stop',
       },
     ],
