@@ -28,25 +28,25 @@ Non-goals for 0.1: GUI, web deployment, local-model inference, PDF/epub ingestio
 
 3  User stories
 	1.	As Chris I run
-dart run ragamuffin.dart --create my-vault ~/Notes --yes
+dart run ragamuffin.dart create my-vault ~/Notes --yes
 and the tool embeds every markdown chunk in that directory, then returns to the prompt.
 	2.	As Chris I later run
-dart run ragamuffin.dart --chat my-vault,
+dart run ragamuffin.dart chat my-vault,
 edit a file during the session, and Ragamuffin warns me the vault is stale.
-	3.	As a shell script I can pipe --update in a cron job without prompts.
+	3.	As a shell script I can pipe update in a cron job without prompts.
 	4.	As Chris I type "list" and see all vault names with their root paths and file inventory.
-	5.	As Chris I can delete a vault and all its chunks with --delete <name>.
+	5.	As Chris I can delete a vault and all its chunks with delete <name>.
 
 ⸻
 
 4  Functional specification
 
-Flag combination	Behaviour
---create <name> <path> [--yes]	Adds a row to vaults, scans <path> (file or directory).  On first run asks: "⚠️ Files will be uploaded … Proceed?" unless --yes present.  Each text chunk: SHA-256, embed via /v1/embeddings, store vector and text.  Fails if name exists.
---update <name>	Looks up root_path.  Adds new chunks, re-embeds changed chunks, deletes vanished chunks, prints delta counts.
---chat <name>	Before chatting, recomputes SHA-256 of all disk chunks and compares to hashes in SQLite.  If mismatch prints a yellow warning with the exact --update command.  Enters a REPL: each user line is sent to GPT-4o-mini with the retrieve_chunks tool registered.  When the model calls the function, Ragamuffin does an in-process cosine ranking of vectors, returns JSON snippets, then streams the model's final answer.
---list or --list <name>	Dumps vaults, their root paths and relative Markdown file list.
---delete <name> [--yes]	Deletes the vault and all its chunks from the database. On first run asks: "⚠️ This will permanently delete vault ... Continue?" unless --yes present. Fails if vault doesn't exist.
+Command	Behaviour
+create <name> <path> [--yes]	Adds a row to vaults, scans <path> (file or directory).  On first run asks: "⚠️ Files will be uploaded … Proceed?" unless --yes present.  Each text chunk: SHA-256, embed via /v1/embeddings, store vector and text.  Fails if name exists.
+update <name>	Looks up root_path.  Adds new chunks, re-embeds changed chunks, deletes vanished chunks, prints delta counts.
+chat <name>	Before chatting, recomputes SHA-256 of all disk chunks and compares to hashes in SQLite.  If mismatch prints a yellow warning with the exact update command.  Enters a REPL: each user line is sent to GPT-4o-mini with the retrieve_chunks tool registered.  When the model calls the function, Ragamuffin does an in-process cosine ranking of vectors, returns JSON snippets, then streams the model's final answer.
+list [name]	Dumps vaults, their root paths and relative Markdown file list.
+delete <name> [--yes]	Deletes the vault and all its chunks from the database. On first run asks: "⚠️ This will permanently delete vault ... Continue?" unless --yes present. Fails if vault doesn't exist.
 
 
 ⸻

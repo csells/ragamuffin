@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:args/args.dart';
 import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
 import 'package:openai_dart/openai_dart.dart';
@@ -57,58 +56,55 @@ Future<void> main(List<String> argv) async {
   }
   _initDb();
 
-  final argp = ArgParser()
-    ..addFlag('create', negatable: false)
-    ..addFlag('update', negatable: false)
-    ..addFlag('chat', negatable: false)
-    ..addFlag('list', negatable: false)
-    ..addFlag('delete', negatable: false)
-    ..addFlag('yes', negatable: false)
-    ..addFlag('debug', negatable: false, help: 'Enable debug logging');
-  final args = argp.parse(argv);
+  // Initialize logging as disabled by default
+  _setupLogging(false);
 
-  // Enable debug logging if requested
-  _setupLogging(args['debug']);
-
-  final modes = [
-    'create',
-    'update',
-    'chat',
-    'list',
-    'delete',
-  ].where((m) => args[m]).toList();
-  if (modes.length != 1) {
+  if (argv.isEmpty) {
     stderr.writeln(
       'Usage:\n'
-      '  --create <name> <file|dir>   [--yes]\n'
-      '  --update <name>\n'
-      '  --chat   <name>\n'
-      '  --list   [name]\n'
-      '  --delete <name> [--yes]',
+      '  create <name> <file|dir>   [--yes]\n'
+      '  update <name>\n'
+      '  chat   <name>\n'
+      '  list   [name]\n'
+      '  delete <name> [--yes]',
     );
     exit(64);
   }
 
-  switch (modes.first) {
+  final command = argv[0];
+  final args = argv.sublist(1);
+
+  switch (command) {
     case 'create':
-      if (argv.length < 3) exit(64);
-      await _createVault(argv[1], argv[2], force: args['yes']);
+      if (args.length < 2) exit(64);
+      await _createVault(args[0], args[1], force: args.contains('--yes'));
       break;
     case 'update':
-      if (argv.length < 2) exit(64);
-      await _updateVault(argv[1]);
+      if (args.isEmpty) exit(64);
+      await _updateVault(args[0]);
       break;
     case 'chat':
-      if (argv.length < 2) exit(64);
-      await _chatLoop(argv[1]);
+      if (args.isEmpty) exit(64);
+      await _chatLoop(args[0]);
       break;
     case 'list':
-      await _listVaults(argv.length > 1 ? argv[1] : null);
+      await _listVaults(args.isNotEmpty ? args[0] : null);
       break;
     case 'delete':
-      if (argv.length < 2) exit(64);
-      await _deleteVault(argv[1], force: args['yes']);
+      if (args.isEmpty) exit(64);
+      await _deleteVault(args[0], force: args.contains('--yes'));
       break;
+    default:
+      stderr.writeln('Unknown command: $command');
+      stderr.writeln(
+        'Usage:\n'
+        '  create <name> <file|dir>   [--yes]\n'
+        '  update <name>\n'
+        '  chat   <name>\n'
+        '  list   [name]\n'
+        '  delete <name> [--yes]',
+      );
+      exit(64);
   }
 
   exit(0); // otherwise the async calls can cause the process to hang
@@ -241,18 +237,15 @@ Future<void> _syncVault(String name, String root) async {
     for (final entry in toAdd) {
       filesToProcess.add(chunkToFile[entry.key]!);
     }
-    final uniqueFiles = filesToProcess.toList()..sort();
-
+    // Keep track of progress sequentially
+    int currentChunk = 0;
     String? currentFile;
-    int currentFileIndex = 0;
     for (final entry in toAdd) {
+      currentChunk++;
       final file = chunkToFile[entry.key]!;
       if (file != currentFile) {
         if (currentFile != null) stdout.write('\n');
-        currentFileIndex = uniqueFiles.indexOf(file);
-        stdout.write(
-          '  (${currentFileIndex + 1}/${uniqueFiles.length}) $file... ',
-        );
+        stdout.write('  ($currentChunk/${toAdd.length}) $file... ');
         currentFile = file;
       }
 
@@ -367,7 +360,7 @@ When asked a question:
   showHelp();
 
   while (true) {
-    stdout.write('\n🙋‍♂️  > ');
+    stdout.write('\n> ');
     final q = stdin.readLineSync()?.trim();
     if (q == null) continue;
 
@@ -379,9 +372,10 @@ When asked a question:
           stdout.writeln('\n👋  Goodbye!');
           return;
         case '/debug':
-          _setupLogging(_logger.level == Level.OFF);
+          final wasEnabled = _logger.level != Level.OFF;
+          _setupLogging(!wasEnabled);
           stdout.writeln(
-            '\n🔧  Debug logging ${_logger.level == Level.OFF ? "disabled" : "enabled"}',
+            '\n🔧  Debug logging ${wasEnabled ? "disabled" : "enabled"}',
           );
           continue;
         case '/help':
@@ -578,14 +572,46 @@ Iterable<FileSystemEntity> _walk(String start) sync* {
   }
 }
 
+// Centralized OpenAI rate limit retry helper
+Future<T> withOpenAIRateLimitRetry<T>(Future<T> Function() fn) async {
+  while (true) {
+    try {
+      return await fn();
+    } on OpenAIClientException catch (e) {
+      final body = e.body;
+      if (body is Map &&
+          body['error'] is Map &&
+          body['error']['code'] == 'rate_limit_exceeded') {
+        final msg = body['error']['message'] as String?;
+        final match = RegExp(
+          r'Please try again in ([0-9.]+)s',
+        ).firstMatch(msg ?? '');
+        double waitSec = 2.0;
+        if (match != null) {
+          waitSec = double.tryParse(match.group(1) ?? '') ?? 2.0;
+        }
+        stdout.writeln(
+          'Rate limit reached. Waiting ${waitSec.toStringAsFixed(1)} seconds before retrying...',
+        );
+        await Future.delayed(Duration(milliseconds: (waitSec * 1000).ceil()));
+        stdout.writeln('Resubmitting request...');
+        continue;
+      }
+      rethrow;
+    }
+  }
+}
+
 Future<List<double>> _embed(String text) async {
   final client = OpenAIClient(apiKey: openAiKey);
-  final response = await client.createEmbedding(
-    request: CreateEmbeddingRequest(
-      model: EmbeddingModel.model(EmbeddingModels.textEmbedding3Small),
-      input: EmbeddingInput.string(text),
-    ),
-  );
+  final response = await withOpenAIRateLimitRetry(() async {
+    return await client.createEmbedding(
+      request: CreateEmbeddingRequest(
+        model: EmbeddingModel.model(EmbeddingModels.textEmbedding3Small),
+        input: EmbeddingInput.string(text),
+      ),
+    );
+  });
   return (response.data.first.embedding as EmbeddingVectorListDouble).value;
 }
 
@@ -595,85 +621,93 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
   _logger.fine('DEBUG: Messages to send:');
   for (var m in messages) {
     _logger.fine(
-      '  Role: ${m['role']}, Content: ${m['content']}, Tool call ID: ${m['tool_call_id']}',
+      '  Role: \x1b[36m${m['role']}\x1b[0m, Content: ${m['content']}, Tool call ID: ${m['tool_call_id']}',
     );
   }
 
-  final response = await client.createChatCompletion(
-    request: CreateChatCompletionRequest(
-      model: ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
-      messages: messages.map((m) {
-        final role = m['role'] as String;
-        final content = m['content'] as String?;
-        final toolCallId = m['tool_call_id'] as String?;
-        final name = m['name'] as String?;
-        final toolCalls = m['tool_calls'] as List<dynamic>?;
+  final response = await withOpenAIRateLimitRetry(() async {
+    return await client.createChatCompletion(
+      request: CreateChatCompletionRequest(
+        model: ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
+        messages: messages.map((m) {
+          final role = m['role'] as String;
+          final content = m['content'] as String?;
+          final toolCallId = m['tool_call_id'] as String?;
+          final name = m['name'] as String?;
+          final toolCalls = m['tool_calls'] as List<dynamic>?;
 
-        _logger.fine(
-          'DEBUG: Processing message - Role: $role, Content: $content, Tool call ID: $toolCallId, Name: $name',
-        );
+          _logger.fine(
+            'DEBUG: Processing message - Role: $role, Content: $content, Tool call ID: $toolCallId, Name: $name',
+          );
 
-        switch (role) {
-          case 'system':
-            return ChatCompletionMessage.system(content: content ?? '');
-          case 'user':
-            return ChatCompletionMessage.user(
-              content: ChatCompletionUserMessageContent.string(content ?? ''),
-            );
-          case 'assistant':
-            if (toolCalls != null) {
-              return ChatCompletionMessage.assistant(
-                content: content ?? '',
-                toolCalls: toolCalls
-                    .map(
-                      (tc) => ChatCompletionMessageToolCall(
-                        id: tc['id'] as String,
-                        type: ChatCompletionMessageToolCallType.function,
-                        function: ChatCompletionMessageFunctionCall(
-                          name: tc['function']['name'] as String,
-                          arguments: tc['function']['arguments'] as String,
-                        ),
-                      ),
-                    )
-                    .toList(),
+          switch (role) {
+            case 'system':
+              return ChatCompletionMessage.system(content: content ?? '');
+            case 'user':
+              return ChatCompletionMessage.user(
+                content: ChatCompletionUserMessageContent.string(content ?? ''),
               );
-            }
-            return ChatCompletionMessage.assistant(content: content ?? '');
-          case 'tool':
-            if (toolCallId == null) {
-              throw ArgumentError('Tool message must have tool_call_id');
-            }
-            return ChatCompletionMessage.tool(
-              content: content ?? '',
-              toolCallId: toolCallId,
-            );
-          case 'function':
-            if (name == null) {
-              throw ArgumentError('Function message must have name');
-            }
-            return ChatCompletionMessage.function(content: content, name: name);
-          default:
-            throw ArgumentError('Unknown role: $role');
-        }
-      }).toList(),
-      tools: [
-        ChatCompletionTool(
-          type: ChatCompletionToolType.function,
-          function: FunctionObject(
-            name: 'retrieve_chunks',
-            description: 'Search for documents in the vector store',
-            parameters: {
-              'type': 'object',
-              'properties': {
-                'query': {'type': 'string', 'description': 'The search query'},
+            case 'assistant':
+              if (toolCalls != null) {
+                return ChatCompletionMessage.assistant(
+                  content: content ?? '',
+                  toolCalls: toolCalls
+                      .map(
+                        (tc) => ChatCompletionMessageToolCall(
+                          id: tc['id'] as String,
+                          type: ChatCompletionMessageToolCallType.function,
+                          function: ChatCompletionMessageFunctionCall(
+                            name: tc['function']['name'] as String,
+                            arguments: tc['function']['arguments'] as String,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                );
+              }
+              return ChatCompletionMessage.assistant(content: content ?? '');
+            case 'tool':
+              if (toolCallId == null) {
+                throw ArgumentError('Tool message must have tool_call_id');
+              }
+              return ChatCompletionMessage.tool(
+                content: content ?? '',
+                toolCallId: toolCallId,
+              );
+            case 'function':
+              if (name == null) {
+                throw ArgumentError('Function message must have name');
+              }
+              return ChatCompletionMessage.function(
+                content: content,
+                name: name,
+              );
+            default:
+              throw ArgumentError('Unknown role: $role');
+          }
+        }).toList(),
+        tools: [
+          ChatCompletionTool(
+            type: ChatCompletionToolType.function,
+            function: FunctionObject(
+              name: 'retrieve_chunks',
+              description: 'Search for documents in the vector store',
+              parameters: {
+                'type': 'object',
+                'properties': {
+                  'query': {
+                    'type': 'string',
+                    'description': 'The search query',
+                  },
+                },
+                'required': ['query'],
               },
-              'required': ['query'],
-            },
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  });
 
   final message = response.choices.first.message;
   if (message.toolCalls != null && message.toolCalls!.isNotEmpty) {
