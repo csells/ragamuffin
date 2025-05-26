@@ -1,4 +1,7 @@
+// ignore_for_file: avoid_print, avoid_dynamic_calls
+
 import 'dart:convert';
+import 'dart:developer' as dev;
 import 'dart:io';
 import 'dart:math';
 
@@ -10,14 +13,12 @@ import 'package:sqlite3/sqlite3.dart';
 /*──────────────────────  CONFIG  ──────────────────────*/
 
 final openAiKey = Platform.environment['OPENAI_API_KEY'] ?? '';
-const embedModel = 'text-embedding-3-small';
-const chatModel = 'gpt-4o-mini';
 
 // Initialize logger
 void _setupLogging(bool enable) {
   Logger.root.level = enable ? Level.ALL : Level.OFF;
   Logger.root.onRecord.listen((record) {
-    print('${record.level.name}: ${record.message}');
+    dev.log('${record.level.name}: ${record.message}');
   });
 }
 
@@ -78,22 +79,17 @@ Future<void> main(List<String> argv) async {
     case 'create':
       if (args.length < 2) exit(64);
       await _createVault(args[0], args[1], force: args.contains('--yes'));
-      break;
     case 'update':
       if (args.isEmpty) exit(64);
       await _updateVault(args[0]);
-      break;
     case 'chat':
       if (args.isEmpty) exit(64);
       await _chatLoop(args[0]);
-      break;
     case 'list':
       await _listVaults(args.isNotEmpty ? args[0] : null);
-      break;
     case 'delete':
       if (args.isEmpty) exit(64);
       await _deleteVault(args[0], force: args.contains('--yes'));
-      break;
     default:
       stderr.writeln('Unknown command: $command');
       stderr.writeln(
@@ -202,7 +198,7 @@ Future<void> _syncVault(String name, String root) async {
     final f = files[i];
     final relativePath = f.path
         .replaceFirst(root, '')
-        .replaceFirst(RegExp(r'^/+'), '');
+        .replaceFirst(RegExp('^/+'), '');
     stdout.write('  (${i + 1}/${files.length}) $relativePath... ');
     final chunks = _chunkText(await f.readAsString());
     fileChunks[relativePath] = chunks;
@@ -218,7 +214,8 @@ Future<void> _syncVault(String name, String root) async {
       .map((r) => r['hash'] as String)
       .toSet();
 
-  int added = 0, deleted = 0;
+  var added = 0;
+  var deleted = 0;
   final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
 
   if (toAdd.isNotEmpty) {
@@ -238,7 +235,7 @@ Future<void> _syncVault(String name, String root) async {
       filesToProcess.add(chunkToFile[entry.key]!);
     }
     // Keep track of progress sequentially
-    int currentChunk = 0;
+    var currentChunk = 0;
     String? currentFile;
     for (final entry in toAdd) {
       currentChunk++;
@@ -291,7 +288,7 @@ Future<void> _listVaults(String? filter) async {
         .whereType<File>()
         .where((f) => f.path.endsWith('.md'))
         .map(
-          (f) => f.path.replaceFirst(root, '').replaceFirst(RegExp(r'^/+'), ''),
+          (f) => f.path.replaceFirst(root, '').replaceFirst(RegExp('^/+'), ''),
         )
         .toList();
     if (files.isEmpty) print('   (no *.md)');
@@ -337,8 +334,8 @@ Future<void> _chatLoop(String name) async {
   final msgs = <Map<String, dynamic>>[
     {
       'role': 'system',
-      'content':
-          '''You are a helpful assistant that answers questions based ONLY on the content in Chris's vault. 
+      'content': '''
+You are a helpful assistant that answers questions based ONLY on the content in Chris's vault. 
 When asked a question:
 1. First, use retrieve_chunks to search for relevant information in the vault
 2. Then, answer the question using ONLY the information found in the vault
@@ -466,15 +463,13 @@ bool _vaultStale(int vaultId, String root) {
 /*──────────────────  UTILITIES  ──────────────────────*/
 
 // Rough estimate: 1 token ≈ 3 chars for English text (more conservative)
-int _estimateTokens(String text) {
-  return (text.length / 3).ceil();
-}
+int _estimateTokens(String text) => (text.length / 3).ceil();
 
 List<String> _chunkText(String text) {
   final sents = text.split(RegExp(r'(?<=[.?!])\s+'));
   final out = <String>[];
   final buf = StringBuffer();
-  int currentTokens = 0;
+  var currentTokens = 0;
   const maxTokens = 6000; // More conservative limit
 
   for (final s in sents) {
@@ -486,7 +481,7 @@ List<String> _chunkText(String text) {
         if (_estimateTokens(chunk) > maxTokens) {
           final words = chunk.split(RegExp(r'\s+'));
           final wordBuf = StringBuffer();
-          int wordTokens = 0;
+          var wordTokens = 0;
           for (final word in words) {
             final wordTokenCount = _estimateTokens(word);
             if (wordTokens + wordTokenCount > maxTokens) {
@@ -512,7 +507,7 @@ List<String> _chunkText(String text) {
       if (sentTokens > maxTokens) {
         final words = s.split(RegExp(r'\s+'));
         final wordBuf = StringBuffer();
-        int wordTokens = 0;
+        var wordTokens = 0;
         for (final word in words) {
           final wordTokenCount = _estimateTokens(word);
           if (wordTokens + wordTokenCount > maxTokens) {
@@ -540,7 +535,7 @@ List<String> _chunkText(String text) {
     if (_estimateTokens(chunk) > maxTokens) {
       final words = chunk.split(RegExp(r'\s+'));
       final wordBuf = StringBuffer();
-      int wordTokens = 0;
+      var wordTokens = 0;
       for (final word in words) {
         final wordTokenCount = _estimateTokens(word);
         if (wordTokens + wordTokenCount > maxTokens) {
@@ -584,16 +579,17 @@ Future<T> withOpenAIRateLimitRetry<T>(Future<T> Function() fn) async {
           body['error']['code'] == 'rate_limit_exceeded') {
         final msg = body['error']['message'] as String?;
         final match = RegExp(
-          r'Please try again in ([0-9.]+)s',
+          'Please try again in ([0-9.]+)s',
         ).firstMatch(msg ?? '');
-        double waitSec = 2.0;
+        var waitSec = 2.0;
         if (match != null) {
           waitSec = double.tryParse(match.group(1) ?? '') ?? 2.0;
         }
         stdout.writeln(
-          'Rate limit reached. Waiting ${waitSec.toStringAsFixed(1)} seconds before retrying...',
+          'Rate limit reached. Waiting ${waitSec.toStringAsFixed(1)} '
+          'seconds before retrying...',
         );
-        await Future.delayed(Duration(milliseconds: (waitSec * 1000).ceil()));
+        await Future.delayed(Duration(milliseconds: (waitSec * 1000).toInt()));
         stdout.writeln('Resubmitting request...');
         continue;
       }
@@ -604,14 +600,14 @@ Future<T> withOpenAIRateLimitRetry<T>(Future<T> Function() fn) async {
 
 Future<List<double>> _embed(String text) async {
   final client = OpenAIClient(apiKey: openAiKey);
-  final response = await withOpenAIRateLimitRetry(() async {
-    return await client.createEmbedding(
+  final response = await withOpenAIRateLimitRetry(
+    () async => client.createEmbedding(
       request: CreateEmbeddingRequest(
-        model: EmbeddingModel.model(EmbeddingModels.textEmbedding3Small),
+        model: const EmbeddingModel.model(EmbeddingModels.textEmbedding3Small),
         input: EmbeddingInput.string(text),
       ),
-    );
-  });
+    ),
+  );
   return (response.data.first.embedding as EmbeddingVectorListDouble).value;
 }
 
@@ -619,16 +615,17 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
   final client = OpenAIClient(apiKey: openAiKey);
 
   _logger.fine('DEBUG: Messages to send:');
-  for (var m in messages) {
+  for (final m in messages) {
     _logger.fine(
-      '  Role: \x1b[36m${m['role']}\x1b[0m, Content: ${m['content']}, Tool call ID: ${m['tool_call_id']}',
+      '  Role: \x1b[36m${m['role']}\x1b[0m, Content: ${m['content']}, '
+      'Tool call ID: ${m['tool_call_id']}',
     );
   }
 
-  final response = await withOpenAIRateLimitRetry(() async {
-    return await client.createChatCompletion(
+  final response = await withOpenAIRateLimitRetry(
+    () async => client.createChatCompletion(
       request: CreateChatCompletionRequest(
-        model: ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
+        model: const ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
         messages: messages.map((m) {
           final role = m['role'] as String;
           final content = m['content'] as String?;
@@ -637,7 +634,8 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
           final toolCalls = m['tool_calls'] as List<dynamic>?;
 
           _logger.fine(
-            'DEBUG: Processing message - Role: $role, Content: $content, Tool call ID: $toolCallId, Name: $name',
+            'DEBUG: Processing message - Role: $role, Content: $content, '
+            'Tool call ID: $toolCallId, Name: $name',
           );
 
           switch (role) {
@@ -687,7 +685,7 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
           }
         }).toList(),
         tools: [
-          ChatCompletionTool(
+          const ChatCompletionTool(
             type: ChatCompletionToolType.function,
             function: FunctionObject(
               name: 'retrieve_chunks',
@@ -706,8 +704,8 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
           ),
         ],
       ),
-    );
-  });
+    ),
+  );
 
   final message = response.choices.first.message;
   if (message.toolCalls != null && message.toolCalls!.isNotEmpty) {
@@ -752,7 +750,7 @@ double _cosineSimilarity(List<double> a, List<double> b) {
   double dotProduct = 0;
   double normA = 0;
   double normB = 0;
-  for (int i = 0; i < a.length; i++) {
+  for (var i = 0; i < a.length; i++) {
     dotProduct += a[i] * b[i];
     normA += a[i] * a[i];
     normB += b[i] * b[i];
@@ -768,7 +766,7 @@ Iterable<_Chunk> _rank(List<_Chunk> all, List<double> q, int k) {
 }
 
 class _Chunk {
+  _Chunk(this.text, this.vec);
   final String text;
   final List<double> vec;
-  _Chunk(this.text, this.vec);
 }

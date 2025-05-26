@@ -26,7 +26,7 @@ dart run ragamuffin.dart [command]
 ### Create a Vault
 
 ```bash
-dart run ragamuffin.dart --create my-vault ~/Notes --yes
+dart run ragamuffin.dart create my-vault ~/Notes --yes
 ```
 
 This will:
@@ -38,7 +38,7 @@ This will:
 ### Update a Vault
 
 ```bash
-dart run ragamuffin.dart --update my-vault
+dart run ragamuffin.dart update my-vault
 ```
 
 This will:
@@ -50,7 +50,7 @@ This will:
 ### Chat with Your Vault
 
 ```bash
-dart run ragamuffin.dart --chat my-vault
+dart run ragamuffin.dart chat my-vault
 ```
 
 This will:
@@ -63,11 +63,21 @@ This will:
 
 ```bash
 # List all vaults
-dart run ragamuffin.dart --list
+dart run ragamuffin.dart list
 
 # List specific vault details
-dart run ragamuffin.dart --list my-vault
+dart run ragamuffin.dart list my-vault
 ```
+
+### Delete a Vault
+
+```bash
+dart run ragamuffin.dart delete my-vault --yes
+```
+
+This will:
+- Delete the vault and all its chunks from the database
+- Prompt for confirmation unless --yes is provided
 
 ## Environment Setup
 
@@ -87,7 +97,7 @@ export OPENAI_API_KEY=your_api_key_here
 ## Technical Details
 
 - Uses OpenAI's text-embedding-3-small (1536-dim) for embeddings
-- Uses GPT-4 with function-calling capabilities
+- Uses GPT-4o-mini with function-calling capabilities
 - Memory footprint < 300 MB during cosine search
 - Cold "create" for a 5 MB vault completes in under two minutes
 
