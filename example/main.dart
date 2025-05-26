@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:args/args.dart';
 import 'package:crypto/crypto.dart';
+import 'package:logging/logging.dart';
 import 'package:openai_dart/openai_dart.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -12,6 +13,16 @@ import 'package:sqlite3/sqlite3.dart';
 final openAiKey = Platform.environment['OPENAI_API_KEY'] ?? '';
 const embedModel = 'text-embedding-3-small';
 const chatModel = 'gpt-4o-mini';
+
+// Initialize logger
+void _setupLogging(bool enable) {
+  Logger.root.level = enable ? Level.ALL : Level.OFF;
+  Logger.root.onRecord.listen((record) {
+    print('${record.level.name}: ${record.message}');
+  });
+}
+
+final _logger = Logger('ragamuffin');
 
 /*──────────────────────  DB INIT  ─────────────────────*/
 
@@ -52,8 +63,12 @@ Future<void> main(List<String> argv) async {
     ..addFlag('chat', negatable: false)
     ..addFlag('list', negatable: false)
     ..addFlag('delete', negatable: false)
-    ..addFlag('yes', negatable: false);
+    ..addFlag('yes', negatable: false)
+    ..addFlag('debug', negatable: false, help: 'Enable debug logging');
   final args = argp.parse(argv);
+
+  // Enable debug logging if requested
+  _setupLogging(args['debug']);
 
   final modes = [
     'create',
@@ -328,28 +343,49 @@ Future<void> _chatLoop(String name) async {
     {
       'role': 'system',
       'content':
-          'You answer from Chris\'s vault. Call retrieve_chunks when needed.',
+          '''You are a helpful assistant that answers questions based ONLY on the content in Chris's vault. 
+When asked a question:
+1. First, use retrieve_chunks to search for relevant information in the vault
+2. Then, answer the question using ONLY the information found in the vault
+3. If the vault doesn't contain relevant information, say so clearly
+4. Do not make up or infer information not present in the vault
+5. Do not use any external knowledge unless it's explicitly mentioned in the vault''',
     },
   ];
 
+  stdout.writeln(
+    '\n💬  Chat started. Type "exit" or "quit" to end the session.',
+  );
+  stdout.writeln('    Available commands:');
+  stdout.writeln('    • exit/quit - End the chat session');
+  stdout.writeln('    • debug - Toggle debug logging');
+
   while (true) {
     stdout.write('\n🙋‍♂️  > ');
-    final q = stdin.readLineSync();
-    if (q == null || q.toLowerCase() == 'exit') break;
+    final q = stdin.readLineSync()?.trim();
+    if (q == null) continue;
 
-    msgs.add({'role': 'user', 'content': q});
-    print('\nDEBUG: Sending messages to API:');
-    for (var m in msgs) {
-      print('  ${jsonEncode(m)}');
+    if (q.toLowerCase() == 'exit' || q.toLowerCase() == 'quit') {
+      stdout.writeln('\n👋  Goodbye!');
+      break;
     }
 
+    if (q.toLowerCase() == 'debug') {
+      _setupLogging(_logger.level == Level.OFF);
+      stdout.writeln(
+        '\n🔧  Debug logging ${_logger.level == Level.OFF ? "disabled" : "enabled"}',
+      );
+      continue;
+    }
+
+    msgs.add({'role': 'user', 'content': q});
+    _logger.fine('Sending messages to API: ${jsonEncode(msgs)}');
+
     final reply = await _chat(msgs);
-    print('\nDEBUG: Received API response:');
-    print('  ${jsonEncode(reply)}');
+    _logger.fine('Received API response: ${jsonEncode(reply)}');
 
     final choice = reply['choices'][0];
-    print('\nDEBUG: Processing choice:');
-    print('  ${jsonEncode(choice)}');
+    _logger.fine('Processing choice: ${jsonEncode(choice)}');
 
     if (choice['finish_reason'] == 'tool_calls') {
       // Add the assistant's message with tool_calls
@@ -358,8 +394,7 @@ Future<void> _chatLoop(String name) async {
         'content': choice['message']['content'],
         'tool_calls': choice['message']['tool_calls'],
       };
-      print('\nDEBUG: Adding assistant message:');
-      print('  ${jsonEncode(assistantMsg)}');
+      _logger.fine('Adding assistant message: ${jsonEncode(assistantMsg)}');
       msgs.add(assistantMsg);
 
       final call = choice['message']['tool_calls'][0];
@@ -374,26 +409,20 @@ Future<void> _chatLoop(String name) async {
         'tool_call_id': call['id'],
         'content': jsonEncode({'snippets': hits}),
       };
-      print('\nDEBUG: Adding tool message:');
-      print('  ${jsonEncode(toolMsg)}');
+      _logger.fine('Adding tool message: ${jsonEncode(toolMsg)}');
       msgs.add(toolMsg);
 
       // Get the final assistant response
-      print('\nDEBUG: Sending messages for final response:');
-      for (var m in msgs) {
-        print('  ${jsonEncode(m)}');
-      }
+      _logger.fine('Sending messages for final response: ${jsonEncode(msgs)}');
       final cont = await _chat(msgs);
-      print('\nDEBUG: Received final response:');
-      print('  ${jsonEncode(cont)}');
+      _logger.fine('Received final response: ${jsonEncode(cont)}');
 
       print('\n🤖  ${cont['choices'][0]['message']['content']}');
       final finalMsg = {
         'role': 'assistant',
         'content': cont['choices'][0]['message']['content'],
       };
-      print('\nDEBUG: Adding final message:');
-      print('  ${jsonEncode(finalMsg)}');
+      _logger.fine('Adding final message: ${jsonEncode(finalMsg)}');
       msgs.add(finalMsg);
     } else {
       print('\n🤖  ${choice['message']['content']}');
@@ -401,8 +430,7 @@ Future<void> _chatLoop(String name) async {
         'role': 'assistant',
         'content': choice['message']['content'],
       };
-      print('\nDEBUG: Adding message:');
-      print('  ${jsonEncode(msg)}');
+      _logger.fine('Adding message: ${jsonEncode(msg)}');
       msgs.add(msg);
     }
   }
@@ -548,10 +576,9 @@ Future<List<double>> _embed(String text) async {
 Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
   final client = OpenAIClient(apiKey: openAiKey);
 
-  // Debug logging
-  print('DEBUG: Messages to send:');
+  _logger.fine('DEBUG: Messages to send:');
   for (var m in messages) {
-    print(
+    _logger.fine(
       '  Role: ${m['role']}, Content: ${m['content']}, Tool call ID: ${m['tool_call_id']}',
     );
   }
@@ -566,7 +593,7 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
         final name = m['name'] as String?;
         final toolCalls = m['tool_calls'] as List<dynamic>?;
 
-        print(
+        _logger.fine(
           'DEBUG: Processing message - Role: $role, Content: $content, Tool call ID: $toolCallId, Name: $name',
         );
 
