@@ -14,31 +14,31 @@ A portable, developer-friendly RAG (Retrieval-Augmented Generation) tool for int
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ragamuffin.git
+git clone https://github.com/csells/ragamuffin.git
 cd ragamuffin
 
 # Run directly with Dart
-dart run ragamuffin.dart [command]
+dart run example/main.dart [command]
 ```
 
 ## Usage
 
-### Create a Vault
+### Create a File-Set
 
 ```bash
-dart run ragamuffin.dart create my-vault ~/Notes --yes
+dart run example/main.dart create my-files ~/Notes --yes
 ```
 
 This will:
-- Create a new vault named "my-vault"
+- Create a new file-set named "my-files"
 - Scan the specified directory for markdown files
 - Embed all text chunks
 - Store vectors and text locally
 
-### Update a Vault
+### Update a File-Set
 
 ```bash
-dart run ragamuffin.dart update my-vault
+dart run example/main.dart update my-files
 ```
 
 This will:
@@ -47,36 +47,36 @@ This will:
 - Delete vanished chunks
 - Print delta counts
 
-### Chat with Your Vault
+### Chat with Your File-Set
 
 ```bash
-dart run ragamuffin.dart chat my-vault
+dart run example/main.dart chat my-files
 ```
 
 This will:
-- Check for any changes in the vault
-- Warn if the vault is stale
+- Check for any changes in the file-set
+- Warn if the file-set is stale
 - Enter a REPL where you can chat with GPT-4
 - The LLM will automatically retrieve relevant chunks as needed
 
-### List Vaults
+### List File-Sets
 
 ```bash
-# List all vaults
-dart run ragamuffin.dart list
+# List all file-sets
+dart run example/main.dart list
 
-# List specific vault details
-dart run ragamuffin.dart list my-vault
+# List specific file-set details
+dart run example/main.dart list my-files
 ```
 
-### Delete a Vault
+### Delete a File-Set
 
 ```bash
-dart run ragamuffin.dart delete my-vault --yes
+dart run example/main.dart delete my-files --yes
 ```
 
 This will:
-- Delete the vault and all its chunks from the database
+- Delete the file-set and all its chunks from the database
 - Prompt for confirmation unless --yes is provided
 
 ## Environment Setup
@@ -89,7 +89,7 @@ export OPENAI_API_KEY=your_api_key_here
 
 ## Privacy & Security
 
-- You'll be warned once per vault that text will be sent to OpenAI
+- You'll be warned once per file-set that text will be sent to OpenAI
 - Only embeddings and plain text are stored locally
 - No API keys are stored in the database
 - Delete `ragamuffin.db` to wipe all vectors
@@ -99,19 +99,12 @@ export OPENAI_API_KEY=your_api_key_here
 - Uses OpenAI's text-embedding-3-small (1536-dim) for embeddings
 - Uses GPT-4o-mini with function-calling capabilities
 - Memory footprint < 300 MB during cosine search
-- Cold "create" for a 5 MB vault completes in under two minutes
+- Cold "create" for a 5 MB file-set completes in under two minutes
 
 ## Future Plans
 
 - Switchable embedding provider (Gemini compatibility)
 - ANN index (HNSW) for larger chunk counts
 - PDF chunker with text-position citations
+- Image embeddings using image descriptions
 - Optional local LLM via llama_cpp for offline answers
-
-## License
-
-[Your chosen license]
-
-## Contributing
-
-[Your contribution guidelines]

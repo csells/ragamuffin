@@ -22,7 +22,8 @@ The document formalises scope, behaviour and technical contracts for version 0.1
 	•	Require explicit consent before the first upload of any user content.
 	•	Keep every dependency pure Dart (no FFI, no binaries) for the MVP.
 
-Non-goals for 0.1: GUI, web deployment, local-model inference, PDF/epub ingestion, ANN indexing beyond brute-force cosine search.
+Non-goals for 0.1: GUI, web deployment, local-model inference, PDF/epub ingestion, ANN indexing beyond brute-force cosine search, image embeddings calculated using image
+descriptions.
 
 ⸻
 
