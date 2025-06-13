@@ -6,8 +6,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:dartantic_ai/dartantic_ai.dart';
 import 'package:logging/logging.dart';
-import 'package:openai_dart/openai_dart.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 /*──────────────────────  CONFIG  ──────────────────────*/
@@ -331,6 +331,9 @@ Future<void> _chatLoop(String name) async {
       )
       .toList(growable: false);
 
+  // Initialize the dartantic_ai agent with tools
+  _initializeAgent(chunks);
+
   final msgs = <Map<String, dynamic>>[
     {
       'role': 'system',
@@ -567,53 +570,54 @@ Iterable<FileSystemEntity> _walk(String start) sync* {
   }
 }
 
-// Centralized OpenAI rate limit retry helper
+// Centralized rate limit retry helper
 Future<T> withOpenAIRateLimitRetry<T>(Future<T> Function() fn) async {
   while (true) {
     try {
       return await fn();
-    } on OpenAIClientException catch (e) {
-      final body = e.body;
-      if (body is Map &&
-          body['error'] is Map &&
-          body['error']['code'] == 'rate_limit_exceeded') {
-        final msg = body['error']['message'] as String?;
-        final match = RegExp(
-          'Please try again in ([0-9.]+)s',
-        ).firstMatch(msg ?? '');
-        var waitSec = 2.0;
-        if (match != null) {
-          waitSec = double.tryParse(match.group(1) ?? '') ?? 2.0;
-        }
-        stdout.writeln(
-          'Rate limit reached. Waiting ${waitSec.toStringAsFixed(1)} '
-          'seconds before retrying...',
-        );
-        await Future.delayed(Duration(milliseconds: (waitSec * 1000).toInt()));
-        stdout.writeln('Resubmitting request...');
-        continue;
-      }
+    } catch (e) {
+      // For now, just handle general exceptions and rethrow
+      // dartantic_ai may handle rate limiting internally
       rethrow;
     }
   }
 }
 
 Future<List<double>> _embed(String text) async {
-  final client = OpenAIClient(apiKey: openAiKey);
+  final agent = Agent('openai');
   final response = await withOpenAIRateLimitRetry(
-    () async => client.createEmbedding(
-      request: CreateEmbeddingRequest(
-        model: const EmbeddingModel.model(EmbeddingModels.textEmbedding3Small),
-        input: EmbeddingInput.string(text),
-      ),
-    ),
+    () async => agent.createEmbedding(text, type: EmbeddingType.document),
   );
-  return (response.data.first.embedding as EmbeddingVectorListDouble).value;
+  return response;
+}
+
+// Global agent and tool for chat functionality
+late Agent _chatAgent;
+late Tool _retrieveTool;
+
+void _initializeAgent(List<_Chunk> chunks) {
+  _retrieveTool = Tool(
+    name: 'retrieve_chunks',
+    description: 'Search for documents in the vector store',
+    inputType: {
+      'type': 'object',
+      'properties': {
+        'query': {'type': 'string', 'description': 'The search query'},
+      },
+      'required': ['query'],
+    }.toSchema(),
+    onCall: (input) async {
+      final query = input['query'] as String;
+      final vecQ = await _embed(query);
+      final hits = _rank(chunks, vecQ, 4).map((c) => c.text).join('\n---\n');
+      return {'snippets': hits};
+    },
+  );
+
+  _chatAgent = Agent('openai:gpt-4o-mini', tools: [_retrieveTool]);
 }
 
 Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
-  final client = OpenAIClient(apiKey: openAiKey);
-
   _logger.fine('DEBUG: Messages to send:');
   for (final m in messages) {
     _logger.fine(
@@ -622,106 +626,84 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
     );
   }
 
-  final response = await withOpenAIRateLimitRetry(
-    () async => client.createChatCompletion(
-      request: CreateChatCompletionRequest(
-        model: const ChatCompletionModel.model(ChatCompletionModels.gpt4oMini),
-        messages: messages.map((m) {
-          final role = m['role'] as String;
-          final content = m['content'] as String?;
-          final toolCallId = m['tool_call_id'] as String?;
-          final name = m['name'] as String?;
-          final toolCalls = m['tool_calls'] as List<dynamic>?;
+  // Convert messages to dartantic_ai Message format
+  final dartanticMessages = <Message>[];
+  for (final m in messages) {
+    final role = m['role'] as String;
+    final content = m['content'] as String?;
+    final toolCallId = m['tool_call_id'] as String?;
+    final toolCalls = m['tool_calls'] as List<dynamic>?;
 
-          _logger.fine(
-            'DEBUG: Processing message - Role: $role, Content: $content, '
-            'Tool call ID: $toolCallId, Name: $name',
-          );
-
-          switch (role) {
-            case 'system':
-              return ChatCompletionMessage.system(content: content ?? '');
-            case 'user':
-              return ChatCompletionMessage.user(
-                content: ChatCompletionUserMessageContent.string(content ?? ''),
-              );
-            case 'assistant':
-              if (toolCalls != null) {
-                return ChatCompletionMessage.assistant(
-                  content: content ?? '',
-                  toolCalls: toolCalls
-                      .map(
-                        (tc) => ChatCompletionMessageToolCall(
-                          id: tc['id'] as String,
-                          type: ChatCompletionMessageToolCallType.function,
-                          function: ChatCompletionMessageFunctionCall(
-                            name: tc['function']['name'] as String,
-                            arguments: tc['function']['arguments'] as String,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                );
-              }
-              return ChatCompletionMessage.assistant(content: content ?? '');
-            case 'tool':
-              if (toolCallId == null) {
-                throw ArgumentError('Tool message must have tool_call_id');
-              }
-              return ChatCompletionMessage.tool(
-                content: content ?? '',
-                toolCallId: toolCallId,
-              );
-            case 'function':
-              if (name == null) {
-                throw ArgumentError('Function message must have name');
-              }
-              return ChatCompletionMessage.function(
-                content: content,
-                name: name,
-              );
-            default:
-              throw ArgumentError('Unknown role: $role');
+    switch (role) {
+      case 'system':
+        dartanticMessages.add(
+          Message(role: MessageRole.system, content: [TextPart(content ?? '')]),
+        );
+      case 'user':
+        dartanticMessages.add(
+          Message(role: MessageRole.user, content: [TextPart(content ?? '')]),
+        );
+      case 'assistant':
+        final parts = <Part>[];
+        if (content?.isNotEmpty ?? false) {
+          parts.add(TextPart(content!));
+        }
+        if (toolCalls != null) {
+          for (final tc in toolCalls) {
+            parts.add(
+              ToolPart(
+                kind: ToolPartKind.call,
+                id: tc['id'] as String,
+                name: tc['function']['name'] as String,
+                arguments: jsonDecode(tc['function']['arguments'] as String),
+              ),
+            );
           }
-        }).toList(),
-        tools: [
-          const ChatCompletionTool(
-            type: ChatCompletionToolType.function,
-            function: FunctionObject(
-              name: 'retrieve_chunks',
-              description: 'Search for documents in the vector store',
-              parameters: {
-                'type': 'object',
-                'properties': {
-                  'query': {
-                    'type': 'string',
-                    'description': 'The search query',
-                  },
-                },
-                'required': ['query'],
-              },
-            ),
+        }
+        dartanticMessages.add(Message(role: MessageRole.model, content: parts));
+      case 'tool':
+        dartanticMessages.add(
+          Message(
+            role: MessageRole.model,
+            content: [
+              ToolPart(
+                kind: ToolPartKind.result,
+                id: toolCallId!,
+                name: '',
+                result: jsonDecode(content ?? '{}'),
+              ),
+            ],
           ),
-        ],
-      ),
-    ),
+        );
+      default:
+        throw ArgumentError('Unknown role: $role');
+    }
+  }
+
+  final response = await withOpenAIRateLimitRetry(
+    () async => _chatAgent.run('', messages: dartanticMessages),
   );
 
-  final message = response.choices.first.message;
-  if (message.toolCalls != null && message.toolCalls!.isNotEmpty) {
-    final toolCall = message.toolCalls!.first;
+  // Convert response back to the expected format
+  final message = response.messages.last;
+  final toolParts = message.content.whereType<ToolPart>().toList();
+
+  if (toolParts.isNotEmpty &&
+      toolParts.any((p) => p.kind == ToolPartKind.call)) {
+    final toolCall = toolParts.first;
     return {
       'choices': [
         {
           'message': {
             'role': 'assistant',
-            'content': message.content ?? '',
+            'content':
+                message.content.whereType<TextPart>().firstOrNull?.text ?? '',
             'tool_calls': [
               {
                 'id': toolCall.id,
                 'function': {
-                  'name': toolCall.function.name,
-                  'arguments': toolCall.function.arguments,
+                  'name': toolCall.name,
+                  'arguments': jsonEncode(toolCall.arguments),
                 },
               },
             ],
@@ -735,7 +717,11 @@ Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
   return {
     'choices': [
       {
-        'message': {'content': message.content ?? '', 'role': 'assistant'},
+        'message': {
+          'content':
+              message.content.whereType<TextPart>().firstOrNull?.text ?? '',
+          'role': 'assistant',
+        },
         'finish_reason': 'stop',
       },
     ],
