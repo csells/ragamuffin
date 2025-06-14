@@ -176,10 +176,9 @@ Future<void> _chatLoop(String name) async {
 
   final chunks = await _repository.getChunks(vault.id);
 
-  // Initialize the dartantic_ai agent with tools
-  _initializeAgent(chunks);
-
-  var msgs = <Message>[];
+  // Initialize the chat agent with tools
+  final chatAgent = ChatAgent(_repository, chunks);
+  var history = <Message>[];
 
   void showHelp() {
     stdout.writeln('\n💬  Available commands:');
@@ -223,52 +222,10 @@ Future<void> _chatLoop(String name) async {
 
     // Let dartantic_ai handle everything automatically
     _logger.fine('Sending query to agent: $q');
-    final response = await _chatAgent.run(q, messages: msgs);
+    final response = await chatAgent.run(q, messages: history);
     print('\n🤖  ${response.output}');
 
     // dartantic_ai automatically manages conversation state
-    msgs = response.messages;
+    history = response.messages;
   }
-}
-
-/*──────────────────  UTILITIES  ──────────────────────*/
-
-// Global agent and tool for chat functionality
-late Agent _chatAgent;
-late Tool _retrieveTool;
-
-void _initializeAgent(List<EmbeddingChunk> chunks) {
-  _retrieveTool = Tool(
-    name: 'retrieve_chunks',
-    description: 'Search for documents in the vector store',
-    inputType: {
-      'type': 'object',
-      'properties': {
-        'query': {'type': 'string', 'description': 'The search query'},
-      },
-      'required': ['query'],
-    }.toSchema(),
-    onCall: (input) async {
-      final query = input['query'] as String;
-      final vecQ = await _repository.createEmbedding(query);
-      final hits = _repository
-          .rankChunks(chunks, vecQ, 4)
-          .map((c) => c.text)
-          .join('\n---\n');
-      return {'snippets': hits};
-    },
-  );
-
-  _chatAgent = Agent(
-    'openai:gpt-4o-mini',
-    tools: [_retrieveTool],
-    systemPrompt: '''
-You are a helpful assistant that answers questions based ONLY on the content in Chris's vault. 
-When asked a question:
-1. First, use retrieve_chunks to search for relevant information in the vault
-2. Then, answer the question using ONLY the information found in the vault
-3. If the vault doesn't contain relevant information, say so clearly
-4. Do not make up or infer information not present in the vault
-5. Do not use any external knowledge unless it's explicitly mentioned in the vault''',
-  );
 }
