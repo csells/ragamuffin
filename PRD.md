@@ -29,10 +29,10 @@ descriptions.
 
 3  User stories
 	1.	As Chris I run
-dart run ragamuffin.dart create my-vault ~/Notes --yes
+dart run example/main.dart create my-vault ~/Notes --yes
 and the tool embeds every markdown chunk in that directory, then returns to the prompt.
 	2.	As Chris I later run
-dart run ragamuffin.dart chat my-vault,
+dart run example/main.dart chat my-vault,
 edit a file during the session, and Ragamuffin warns me the vault is stale.
 	3.	As a shell script I can pipe update in a cron job without prompts.
 	4.	As Chris I type "list" and see all vault names with their root paths and file inventory.
@@ -92,10 +92,10 @@ vec is a JSON-encoded List<double> (embedding). hash + vault_id is unique.
 
 10  Milestones
 
-Milestone	Deliverable	Target date
-M0	Launch repo, commit working CLI (feature-complete code above), README with usage examples	T + 1 day
-M1	Unit tests for create/update/list drift logic, GitHub Actions matrix build	T + 1 week
-M2	Binary releases (.exe, .dmg, .tar.gz) with GitHub Releases	T + 2 weeks
+Milestone	Deliverable	Status
+M0	Launch repo, commit working CLI (feature-complete code above), README with usage examples	✅ COMPLETE
+M1	Unit tests for create/update/list drift logic, GitHub Actions matrix build	✅ COMPLETE (22 tests)
+M2	Binary releases (.exe, .dmg, .tar.gz) with GitHub Releases	📋 PLANNED
 
 
 ⸻

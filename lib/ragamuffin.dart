@@ -1,8 +1,7 @@
-/// Support for doing something awesome.
-///
-/// More dartdocs go here.
+/// A RAG (Retrieval-Augmented Generation) tool for querying documents with
+/// embeddings
 library;
 
-export 'src/ragamuffin_base.dart';
-
-// TODO: Export any libraries intended for clients of this package.
+export 'src/embedding_chunk.dart';
+export 'src/rag_repository.dart';
+export 'src/vault.dart';

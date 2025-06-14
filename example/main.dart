@@ -3,12 +3,11 @@
 import 'dart:convert';
 import 'dart:developer' as dev;
 import 'dart:io';
-import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:dartantic_ai/dartantic_ai.dart';
 import 'package:logging/logging.dart';
-import 'package:sqlite3/sqlite3.dart';
+import 'package:ragamuffin/ragamuffin.dart';
 
 /*──────────────────────  CONFIG  ──────────────────────*/
 
@@ -24,29 +23,9 @@ void _setupLogging(bool enable) {
 
 final _logger = Logger('ragamuffin');
 
-/*──────────────────────  DB INIT  ─────────────────────*/
+/*──────────────────────  REPOSITORY  ─────────────────────*/
 
-final db = sqlite3.open('ragamuffin.db');
-
-void _initDb() {
-  db.execute('''
-    CREATE TABLE IF NOT EXISTS vaults (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      name      TEXT UNIQUE,
-      root_path TEXT
-    );
-  ''');
-  db.execute('''
-    CREATE TABLE IF NOT EXISTS chunks (
-      id        INTEGER PRIMARY KEY AUTOINCREMENT,
-      vault_id  INTEGER,
-      hash      TEXT,
-      text      TEXT,
-      vec       BLOB,
-      UNIQUE(hash, vault_id)
-    );
-  ''');
-}
+final repository = EmbeddingRepository('ragamuffin.db');
 
 /*──────────────────────  MAIN  ────────────────────────*/
 
@@ -55,7 +34,7 @@ Future<void> main(List<String> argv) async {
     stderr.writeln('export OPENAI_API_KEY before running.');
     exit(64);
   }
-  _initDb();
+  repository.initialize();
 
   // Initialize logging as disabled by default
   _setupLogging(false);
@@ -124,35 +103,30 @@ Future<void> _createVault(
       exit(0);
     }
   }
-  if (db.select('SELECT 1 FROM vaults WHERE name = ?', [name]).isNotEmpty) {
-    stderr.writeln('Vault "$name" already exists. Use --update.');
+
+  try {
+    final vault = await repository.createVault(name, root);
+    await _syncVault(vault.name, vault.rootPath);
+  } on Exception catch (ex) {
+    stderr.writeln('Error: Vault "$name": $ex');
     exit(1);
   }
-  db.execute('INSERT INTO vaults (name, root_path) VALUES (?, ?)', [
-    name,
-    root,
-  ]);
-  await _syncVault(name, root);
 }
 
 Future<void> _updateVault(String name) async {
-  final row = db.select('SELECT root_path FROM vaults WHERE name = ?', [
-    name,
-  ]).firstOrNull;
-  if (row == null) {
-    stderr.writeln('No vault named "$name". Run --create first.');
+  final vault = await repository.getVault(name);
+  if (vault == null) {
+    stderr.writeln('No vault named "$name". Run create command first.');
     exit(1);
   }
-  await _syncVault(name, row['root_path'] as String);
+  await _syncVault(vault.name, vault.rootPath);
 }
 
 /*────────────────────────  DELETE  ──────────────────────*/
 
 Future<void> _deleteVault(String name, {required bool force}) async {
-  final row = db.select('SELECT id FROM vaults WHERE name = ?', [
-    name,
-  ]).firstOrNull;
-  if (row == null) {
+  final vault = await repository.getVault(name);
+  if (vault == null) {
     stderr.writeln('No vault named "$name".');
     exit(1);
   }
@@ -169,30 +143,26 @@ Future<void> _deleteVault(String name, {required bool force}) async {
     }
   }
 
-  final vaultId = row['id'] as int;
-
-  // Delete all chunks first (due to foreign key constraint)
-  db.execute('DELETE FROM chunks WHERE vault_id = ?', [vaultId]);
-
-  // Then delete the vault
-  db.execute('DELETE FROM vaults WHERE id = ?', [vaultId]);
-
+  await repository.deleteVault(name);
   print('Vault "$name" deleted.');
 }
 
 /*──────────────  INDEX / SYNC SHARED LOGIC  ───────────*/
 
 Future<void> _syncVault(String name, String root) async {
-  final vaultId =
-      db.select('SELECT id FROM vaults WHERE name = ?', [name]).first['id']
-          as int;
+  final vault = await repository.getVault(name);
+  if (vault == null) {
+    throw ArgumentError('No vault named "$name"');
+  }
 
   stdout.write('Scanning files...\n');
   final disk = <String, String>{}; // hash -> text
   final fileChunks = <String, List<String>>{}; // file -> chunks
-  final files = _walk(
-    root,
-  ).whereType<File>().where((f) => f.path.endsWith('.md')).toList();
+  final files = repository
+      .walkDirectory(root)
+      .whereType<File>()
+      .where((f) => f.path.endsWith('.md'))
+      .toList();
 
   for (var i = 0; i < files.length; i++) {
     final f = files[i];
@@ -200,7 +170,7 @@ Future<void> _syncVault(String name, String root) async {
         .replaceFirst(root, '')
         .replaceFirst(RegExp('^/+'), '');
     stdout.write('  (${i + 1}/${files.length}) $relativePath... ');
-    final chunks = _chunkText(await f.readAsString());
+    final chunks = repository.chunkText(await f.readAsString());
     fileChunks[relativePath] = chunks;
     for (final piece in chunks) {
       disk[sha256.convert(utf8.encode(piece)).toString()] = piece;
@@ -209,10 +179,7 @@ Future<void> _syncVault(String name, String root) async {
   }
   stdout.writeln('Scan complete.');
 
-  final dbHashes = db
-      .select('SELECT hash FROM chunks WHERE vault_id = ?', [vaultId])
-      .map((r) => r['hash'] as String)
-      .toSet();
+  final dbHashes = await repository.getChunkHashes(vault.id);
 
   var added = 0;
   var deleted = 0;
@@ -229,11 +196,6 @@ Future<void> _syncVault(String name, String root) async {
       }
     }
 
-    // Get all files that have chunks to add
-    final filesToProcess = <String>{};
-    for (final entry in toAdd) {
-      filesToProcess.add(chunkToFile[entry.key]!);
-    }
     // Keep track of progress sequentially
     var currentChunk = 0;
     String? currentFile;
@@ -246,10 +208,11 @@ Future<void> _syncVault(String name, String root) async {
         currentFile = file;
       }
 
-      final vec = await _embed(entry.value);
-      db.execute(
-        'INSERT INTO chunks (vault_id, hash, text, vec) VALUES (?,?,?,?)',
-        [vaultId, entry.key, entry.value, jsonEncode(vec)],
+      final vec = await repository.createEmbedding(entry.value);
+      await repository.addChunk(
+        vaultId: vault.id,
+        text: entry.value,
+        vector: vec,
       );
       added++;
       stdout.write('.');
@@ -258,10 +221,7 @@ Future<void> _syncVault(String name, String root) async {
   }
 
   for (final hash in dbHashes.difference(disk.keys.toSet())) {
-    db.execute('DELETE FROM chunks WHERE hash = ? AND vault_id = ?', [
-      hash,
-      vaultId,
-    ]);
+    await repository.deleteChunk(hash, vault.id);
     deleted++;
   }
   print('\nVault "$name" sync  → added: $added  deleted: $deleted');
@@ -270,25 +230,22 @@ Future<void> _syncVault(String name, String root) async {
 /*────────────────────────  LIST  ──────────────────────*/
 
 Future<void> _listVaults(String? filter) async {
-  final rows = filter == null
-      ? db.select('SELECT name, root_path FROM vaults')
-      : db.select('SELECT name, root_path FROM vaults WHERE name = ?', [
-          filter,
-        ]);
+  final vaults = await repository.getAllVaults(filter);
 
-  if (rows.isEmpty) {
+  if (vaults.isEmpty) {
     stderr.writeln(filter == null ? 'No vaults.' : 'No vault named "$filter".');
     return;
   }
-  for (final r in rows) {
-    final name = r['name'] as String;
-    final root = r['root_path'] as String;
-    print('\n🗄️  $name  →  $root');
-    final files = _walk(root)
+  for (final vault in vaults) {
+    print('\n🗄️  ${vault.name}  →  ${vault.rootPath}');
+    final files = repository
+        .walkDirectory(vault.rootPath)
         .whereType<File>()
         .where((f) => f.path.endsWith('.md'))
         .map(
-          (f) => f.path.replaceFirst(root, '').replaceFirst(RegExp('^/+'), ''),
+          (f) => f.path
+              .replaceFirst(vault.rootPath, '')
+              .replaceFirst(RegExp('^/+'), ''),
         )
         .toList();
     if (files.isEmpty) print('   (no *.md)');
@@ -301,38 +258,26 @@ Future<void> _listVaults(String? filter) async {
 /*────────────────────────  CHAT  ──────────────────────*/
 
 Future<void> _chatLoop(String name) async {
-  final row = db.select('SELECT id, root_path FROM vaults WHERE name = ?', [
-    name,
-  ]).firstOrNull;
-  if (row == null) {
+  final vault = await repository.getVault(name);
+  if (vault == null) {
     stderr.writeln('No vault named "$name".');
     exit(1);
   }
-  final vaultId = row['id'] as int;
-  final root = row['root_path'] as String;
 
-  if (_vaultStale(vaultId, root)) {
+  if (await repository.isVaultStale(vault.id, vault.rootPath)) {
     stdout.writeln(
       '\x1B[33m⚠️  Vault "$name" may be out-of-date. '
       'Run: dart run ragamuffin.dart --update $name\x1B[0m',
     );
   }
 
-  final chunks = db
-      .select('SELECT text, vec FROM chunks WHERE vault_id = ?', [vaultId])
-      .map(
-        (r) => _Chunk(
-          r['text'] as String,
-          (jsonDecode(r['vec'] as String) as List)
-              .cast<num>()
-              .map((n) => n.toDouble())
-              .toList(),
-        ),
-      )
+  final chunks = await repository.getChunks(vault.id);
+  final chunkData = chunks
+      .map((c) => _Chunk(c.text, c.vector))
       .toList(growable: false);
 
   // Initialize the dartantic_ai agent with tools
-  _initializeAgent(chunks);
+  _initializeAgent(chunkData);
 
   var msgs = <Message>[];
 
@@ -376,144 +321,17 @@ Future<void> _chatLoop(String name) async {
       }
     }
 
-
-
     // Let dartantic_ai handle everything automatically
     _logger.fine('Sending query to agent: $q');
     final response = await _chatAgent.run(q, messages: msgs);
     print('\n🤖  ${response.output}');
-    
+
     // dartantic_ai automatically manages conversation state
     msgs = response.messages;
   }
 }
 
-bool _vaultStale(int vaultId, String root) {
-  final diskHashes = <String>{};
-  for (final f in _walk(
-    root,
-  ).whereType<File>().where((f) => f.path.endsWith('.md'))) {
-    for (final t in _chunkText(File(f.path).readAsStringSync())) {
-      diskHashes.add(sha256.convert(utf8.encode(t)).toString());
-    }
-  }
-  final dbHashes = db
-      .select('SELECT hash FROM chunks WHERE vault_id = ?', [vaultId])
-      .map((r) => r['hash'] as String)
-      .toSet();
-  return diskHashes.length != dbHashes.length ||
-      !diskHashes.containsAll(dbHashes);
-}
-
 /*──────────────────  UTILITIES  ──────────────────────*/
-
-// Rough estimate: 1 token ≈ 3 chars for English text (more conservative)
-int _estimateTokens(String text) => (text.length / 3).ceil();
-
-List<String> _chunkText(String text) {
-  final sents = text.split(RegExp(r'(?<=[.?!])\s+'));
-  final out = <String>[];
-  final buf = StringBuffer();
-  var currentTokens = 0;
-  const maxTokens = 6000; // More conservative limit
-
-  for (final s in sents) {
-    final sentTokens = _estimateTokens(s);
-    if (currentTokens + sentTokens > maxTokens) {
-      if (buf.isNotEmpty) {
-        final chunk = buf.toString().trim();
-        // Safety check - if our estimate was wrong, split the chunk
-        if (_estimateTokens(chunk) > maxTokens) {
-          final words = chunk.split(RegExp(r'\s+'));
-          final wordBuf = StringBuffer();
-          var wordTokens = 0;
-          for (final word in words) {
-            final wordTokenCount = _estimateTokens(word);
-            if (wordTokens + wordTokenCount > maxTokens) {
-              if (wordBuf.isNotEmpty) {
-                out.add(wordBuf.toString().trim());
-                wordBuf.clear();
-                wordTokens = 0;
-              }
-            }
-            wordBuf.write('$word ');
-            wordTokens += wordTokenCount;
-          }
-          if (wordBuf.isNotEmpty) {
-            out.add(wordBuf.toString().trim());
-          }
-        } else {
-          out.add(chunk);
-        }
-        buf.clear();
-        currentTokens = 0;
-      }
-      // If a single sentence is too long, split it into smaller pieces
-      if (sentTokens > maxTokens) {
-        final words = s.split(RegExp(r'\s+'));
-        final wordBuf = StringBuffer();
-        var wordTokens = 0;
-        for (final word in words) {
-          final wordTokenCount = _estimateTokens(word);
-          if (wordTokens + wordTokenCount > maxTokens) {
-            if (wordBuf.isNotEmpty) {
-              out.add(wordBuf.toString().trim());
-              wordBuf.clear();
-              wordTokens = 0;
-            }
-          }
-          wordBuf.write('$word ');
-          wordTokens += wordTokenCount;
-        }
-        if (wordBuf.isNotEmpty) {
-          out.add(wordBuf.toString().trim());
-        }
-        continue;
-      }
-    }
-    buf.write('$s ');
-    currentTokens += sentTokens;
-  }
-  if (buf.isNotEmpty) {
-    final chunk = buf.toString().trim();
-    // Final safety check
-    if (_estimateTokens(chunk) > maxTokens) {
-      final words = chunk.split(RegExp(r'\s+'));
-      final wordBuf = StringBuffer();
-      var wordTokens = 0;
-      for (final word in words) {
-        final wordTokenCount = _estimateTokens(word);
-        if (wordTokens + wordTokenCount > maxTokens) {
-          if (wordBuf.isNotEmpty) {
-            out.add(wordBuf.toString().trim());
-            wordBuf.clear();
-            wordTokens = 0;
-          }
-        }
-        wordBuf.write('$word ');
-        wordTokens += wordTokenCount;
-      }
-      if (wordBuf.isNotEmpty) {
-        out.add(wordBuf.toString().trim());
-      }
-    } else {
-      out.add(chunk);
-    }
-  }
-  return out;
-}
-
-Iterable<FileSystemEntity> _walk(String start) sync* {
-  final t = FileSystemEntity.typeSync(start);
-  if (t == FileSystemEntityType.file) {
-    yield File(start);
-  } else if (t == FileSystemEntityType.directory) {
-    yield* Directory(start).listSync(recursive: true, followLinks: false);
-  }
-}
-
-Future<List<double>> _embed(String text) =>
-    Agent('openai').createEmbedding(text, type: EmbeddingType.document);
 
 // Global agent and tool for chat functionality
 late Agent _chatAgent;
@@ -532,7 +350,7 @@ void _initializeAgent(List<_Chunk> chunks) {
     }.toSchema(),
     onCall: (input) async {
       final query = input['query'] as String;
-      final vecQ = await _embed(query);
+      final vecQ = await repository.createEmbedding(query);
       final hits = _rank(chunks, vecQ, 4).map((c) => c.text).join('\n---\n');
       return {'snippets': hits};
     },
@@ -552,25 +370,11 @@ When asked a question:
   );
 }
 
-double _cosineSimilarity(List<double> a, List<double> b) {
-  if (a.length != b.length) {
-    throw ArgumentError('Vectors must have same length');
-  }
-
-  double dotProduct = 0;
-  double normA = 0;
-  double normB = 0;
-  for (var i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  return dotProduct / (sqrt(normA) * sqrt(normB));
-}
-
 Iterable<_Chunk> _rank(List<_Chunk> all, List<double> q, int k) {
   final scored =
-      all.map((c) => MapEntry(c, _cosineSimilarity(c.vec, q))).toList()
+      all
+          .map((c) => MapEntry(c, repository.cosineSimilarity(c.vec, q)))
+          .toList()
         ..sort((a, b) => b.value.compareTo(a.value));
   return scored.take(k).map((e) => e.key);
 }
