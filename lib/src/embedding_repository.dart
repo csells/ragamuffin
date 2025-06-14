@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:dartantic_ai/dartantic_ai.dart';
@@ -8,6 +8,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'embedding_chunk.dart';
 import 'vault.dart';
+import 'vault_info.dart';
 
 /// Repository for managing embeddings and vector operations
 class EmbeddingRepository {
@@ -107,7 +108,7 @@ class EmbeddingRepository {
   Future<void> addChunk({
     required int vaultId,
     required String text,
-    required List<double> vector,
+    required Float64List vector,
   }) async {
     final hash = sha256.convert(utf8.encode(text)).toString();
 
@@ -145,35 +146,24 @@ class EmbeddingRepository {
   }
 
   /// Generate embedding for text using dartantic_ai
-  Future<List<double>> createEmbedding(String text) async =>
-      Agent('openai').createEmbedding(text, type: EmbeddingType.document);
-
-  /// Calculate cosine similarity between two vectors
-  double cosineSimilarity(List<double> a, List<double> b) {
-    if (a.length != b.length) {
-      throw ArgumentError('Vectors must have same length');
-    }
-
-    double dotProduct = 0;
-    double normA = 0;
-    double normB = 0;
-    for (var i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    return dotProduct / (sqrt(normA) * sqrt(normB));
+  Future<Float64List> createEmbedding(String text) async {
+    final embedding = await Agent(
+      'openai',
+    ).createEmbedding(text, type: EmbeddingType.document);
+    return Float64List.fromList(embedding);
   }
 
   /// Rank chunks by similarity to query vector
   List<EmbeddingChunk> rankChunks(
     List<EmbeddingChunk> chunks,
-    List<double> queryVector,
+    Float64List queryVector,
     int topK,
   ) {
     final scored =
         chunks
-            .map((c) => MapEntry(c, cosineSimilarity(c.vector, queryVector)))
+            .map(
+              (c) => MapEntry(c, Agent.cosineSimilarity(c.vector, queryVector)),
+            )
             .toList()
           ..sort((a, b) => b.value.compareTo(a.value));
 
@@ -275,6 +265,75 @@ class EmbeddingRepository {
     final dbHashes = await getChunkHashes(vaultId);
     return diskHashes.length != dbHashes.length ||
         !diskHashes.containsAll(dbHashes);
+  }
+
+  /// Synchronize a vault with its file system directory
+  Future<Map<String, int>> syncVault(String name) async {
+    final vault = await getVault(name);
+    if (vault == null) {
+      throw ArgumentError('No vault named "$name"');
+    }
+
+    // Scan files and create chunks
+    final disk = <String, String>{}; // hash -> text
+    final files = walkDirectory(
+      vault.rootPath,
+    ).whereType<File>().where((f) => f.path.endsWith('.md')).toList();
+
+    for (final file in files) {
+      final content = await file.readAsString();
+      final chunks = chunkText(content);
+      for (final chunk in chunks) {
+        final hash = sha256.convert(utf8.encode(chunk)).toString();
+        disk[hash] = chunk;
+      }
+    }
+
+    // Get existing chunks
+    final dbHashes = await getChunkHashes(vault.id);
+
+    // Calculate what to add and delete
+    final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
+    final toDelete = dbHashes.difference(disk.keys.toSet());
+
+    // Add new chunks
+    var added = 0;
+    for (final entry in toAdd) {
+      final vector = await createEmbedding(entry.value);
+      await addChunk(vaultId: vault.id, text: entry.value, vector: vector);
+      added++;
+    }
+
+    // Delete removed chunks
+    var deleted = 0;
+    for (final hash in toDelete) {
+      await deleteChunk(hash, vault.id);
+      deleted++;
+    }
+
+    return {'added': added, 'deleted': deleted};
+  }
+
+  /// Get vault information with file listings
+  Future<List<VaultInfo>> getVaultInfo([String? filter]) async {
+    final vaults = await getAllVaults(filter);
+    final result = <VaultInfo>[];
+
+    for (final vault in vaults) {
+      final files = walkDirectory(vault.rootPath)
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.md'))
+          .map(
+            (f) => f.path
+                .replaceFirst(vault.rootPath, '')
+                .replaceFirst(RegExp('^/+'), ''),
+          )
+          .toList();
+
+      result.add(VaultInfo(vault: vault, markdownFiles: files));
+    }
+
+    return result;
   }
 
   /// Close the database connection

@@ -3,5 +3,6 @@
 library;
 
 export 'src/embedding_chunk.dart';
-export 'src/rag_repository.dart';
+export 'src/embedding_repository.dart';
 export 'src/vault.dart';
+export 'src/vault_info.dart';

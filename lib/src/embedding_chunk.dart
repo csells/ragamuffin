@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 /// Represents a text chunk with its embedding vector
 class EmbeddingChunk {
@@ -17,10 +18,12 @@ class EmbeddingChunk {
     vaultId: map['vault_id'] as int,
     hash: map['hash'] as String,
     text: map['text'] as String,
-    vector: (jsonDecode(map['vec'] as String) as List)
-        .cast<num>()
-        .map((n) => n.toDouble())
-        .toList(),
+    vector: Float64List.fromList(
+      (jsonDecode(map['vec'] as String) as List)
+          .cast<num>()
+          .map((n) => n.toDouble())
+          .toList(),
+    ),
   );
 
   /// The unique identifier for this chunk.
@@ -36,7 +39,7 @@ class EmbeddingChunk {
   final String text;
 
   /// The embedding vector representing this chunk's semantic meaning.
-  final List<double> vector;
+  final Float64List vector;
 
   /// Converts this chunk to a map representation suitable for database storage.
   Map<String, dynamic> toMap() => {

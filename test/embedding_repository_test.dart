@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
+import 'package:dartantic_ai/dartantic_ai.dart';
 import 'package:ragamuffin/ragamuffin.dart';
 import 'package:test/test.dart';
 
@@ -8,6 +10,9 @@ void main() {
   late EmbeddingRepository repository;
   late Directory tempDir;
   late String tempDbPath;
+
+  // Helper function to convert list to Float64List
+  Float64List vec(List<double> values) => Float64List.fromList(values);
 
   setUp(() async {
     // Create temporary directory and database for each test
@@ -20,9 +25,7 @@ void main() {
   tearDown(() {
     // Clean up after each test
     repository.close();
-    if (tempDir.existsSync()) {
-      tempDir.deleteSync(recursive: true);
-    }
+    if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
   });
 
   group('Vault Operations', () {
@@ -105,7 +108,7 @@ void main() {
       await repository.addChunk(
         vaultId: vault.id,
         text: 'test chunk',
-        vector: [1.0, 2.0, 3.0],
+        vector: vec([1.0, 2.0, 3.0]),
       );
 
       await repository.deleteVault(name);
@@ -129,7 +132,7 @@ void main() {
 
     test('should add chunk to vault', () async {
       const text = 'This is a test chunk';
-      final vector = [1.0, 2.0, 3.0, 4.0];
+      final vector = vec([1.0, 2.0, 3.0, 4.0]);
 
       await repository.addChunk(
         vaultId: testVault.id,
@@ -148,12 +151,12 @@ void main() {
       await repository.addChunk(
         vaultId: testVault.id,
         text: 'chunk 1',
-        vector: [1.0, 2.0],
+        vector: vec([1.0, 2.0]),
       );
       await repository.addChunk(
         vaultId: testVault.id,
         text: 'chunk 2',
-        vector: [3.0, 4.0],
+        vector: vec([3.0, 4.0]),
       );
 
       final chunks = await repository.getChunks(testVault.id);
@@ -165,7 +168,7 @@ void main() {
       await repository.addChunk(
         vaultId: testVault.id,
         text: 'test chunk',
-        vector: [1.0, 2.0],
+        vector: vec([1.0, 2.0]),
       );
 
       final hashes = await repository.getChunkHashes(testVault.id);
@@ -179,7 +182,7 @@ void main() {
       await repository.addChunk(
         vaultId: testVault.id,
         text: text,
-        vector: [1.0, 2.0],
+        vector: vec([1.0, 2.0]),
       );
 
       final hashes = await repository.getChunkHashes(testVault.id);
@@ -194,21 +197,21 @@ void main() {
 
   group('Utility Functions', () {
     test('should calculate cosine similarity correctly', () {
-      final vec1 = [1.0, 0.0, 0.0];
-      final vec2 = [1.0, 0.0, 0.0];
-      final vec3 = [0.0, 1.0, 0.0];
+      final vec1 = vec([1.0, 0.0, 0.0]);
+      final vec2 = vec([1.0, 0.0, 0.0]);
+      final vec3 = vec([0.0, 1.0, 0.0]);
 
-      expect(repository.cosineSimilarity(vec1, vec2), equals(1.0));
-      expect(repository.cosineSimilarity(vec1, vec3), equals(0.0));
+      expect(Agent.cosineSimilarity(vec1, vec2), equals(1.0));
+      expect(Agent.cosineSimilarity(vec1, vec3), equals(0.0));
     });
 
     test('should throw error for mismatched vector lengths', () {
-      final vec1 = [1.0, 2.0];
-      final vec2 = [1.0, 2.0, 3.0];
+      final vec1 = vec([1.0, 2.0]);
+      final vec2 = vec([1.0, 2.0, 3.0]);
 
       expect(
-        () => repository.cosineSimilarity(vec1, vec2),
-        throwsArgumentError,
+        () => Agent.cosineSimilarity(vec1, vec2),
+        throwsA(isA<AssertionError>()),
       );
     });
 
@@ -230,30 +233,30 @@ void main() {
 
     test('should rank chunks by similarity', () {
       final chunks = [
-        const EmbeddingChunk(
+        EmbeddingChunk(
           id: 1,
           vaultId: 1,
           hash: 'hash1',
           text: 'chunk1',
-          vector: [1.0, 0.0, 0.0],
+          vector: vec([1.0, 0.0, 0.0]),
         ),
-        const EmbeddingChunk(
+        EmbeddingChunk(
           id: 2,
           vaultId: 1,
           hash: 'hash2',
           text: 'chunk2',
-          vector: [0.8, 0.6, 0.0],
+          vector: vec([0.8, 0.6, 0.0]),
         ),
-        const EmbeddingChunk(
+        EmbeddingChunk(
           id: 3,
           vaultId: 1,
           hash: 'hash3',
           text: 'chunk3',
-          vector: [0.0, 1.0, 0.0],
+          vector: vec([0.0, 1.0, 0.0]),
         ),
       ];
 
-      final queryVector = [1.0, 0.0, 0.0];
+      final queryVector = vec([1.0, 0.0, 0.0]);
       final ranked = repository.rankChunks(chunks, queryVector, 2);
 
       expect(ranked, hasLength(2));
@@ -302,7 +305,7 @@ void main() {
         await repository.addChunk(
           vaultId: vault.id,
           text: chunk,
-          vector: List.generate(10, (i) => Random().nextDouble()),
+          vector: vec(List.generate(10, (i) => Random().nextDouble())),
         );
       }
 
@@ -314,6 +317,117 @@ void main() {
 
       // Vault should now be stale
       expect(await repository.isVaultStale(vault.id, vault.rootPath), isTrue);
+    });
+  });
+
+  group('Sync Operations', () {
+    test('should throw error when syncing non-existent vault', () async {
+      expect(() => repository.syncVault('non-existent'), throwsArgumentError);
+    });
+
+    test('should detect file changes for sync operations', () async {
+      // Create test vault and files
+      final testDir = Directory('${tempDir.path}/sync_test');
+      await testDir.create();
+
+      final vault = await repository.createVault('sync-vault', testDir.path);
+
+      // Create initial file
+      final file1 = File('${testDir.path}/doc1.md');
+      await file1.writeAsString('Initial content for document 1.');
+
+      // Add a chunk manually to simulate existing data
+      await repository.addChunk(
+        vaultId: vault.id,
+        text: 'Initial content for document 1.',
+        vector: vec(List.generate(10, (i) => i.toDouble())),
+      );
+
+      // Check that vault is not stale with matching content
+      expect(await repository.isVaultStale(vault.id, vault.rootPath), isFalse);
+
+      // Modify file content
+      await file1.writeAsString('Modified content for document 1.');
+
+      // Check that vault is now stale
+      expect(await repository.isVaultStale(vault.id, vault.rootPath), isTrue);
+
+      // Add another file
+      final file2 = File('${testDir.path}/doc2.md');
+      await file2.writeAsString('Additional content for document 2.');
+
+      // Vault should still be stale
+      expect(await repository.isVaultStale(vault.id, vault.rootPath), isTrue);
+    });
+  });
+
+  group('Vault Info Operations', () {
+    test('should get vault info with file listings', () async {
+      // Create test vaults with files
+      final testDir1 = Directory('${tempDir.path}/vault1');
+      final testDir2 = Directory('${tempDir.path}/vault2');
+      await testDir1.create();
+      await testDir2.create();
+
+      await repository.createVault('vault1', testDir1.path);
+      await repository.createVault('vault2', testDir2.path);
+
+      // Create some markdown files
+      await File('${testDir1.path}/doc1.md').writeAsString('Content 1');
+      await File('${testDir1.path}/doc2.md').writeAsString('Content 2');
+      await File('${testDir2.path}/readme.md').writeAsString('Readme content');
+
+      // Create a non-markdown file that should be ignored
+      await File('${testDir1.path}/notes.txt').writeAsString('Text file');
+
+      final vaultInfos = await repository.getVaultInfo();
+
+      expect(vaultInfos, hasLength(2));
+
+      final vault1Info = vaultInfos.firstWhere((v) => v.vault.name == 'vault1');
+      final vault2Info = vaultInfos.firstWhere((v) => v.vault.name == 'vault2');
+
+      expect(vault1Info.markdownFiles, hasLength(2));
+      expect(vault1Info.markdownFiles, containsAll(['doc1.md', 'doc2.md']));
+
+      expect(vault2Info.markdownFiles, hasLength(1));
+      expect(vault2Info.markdownFiles, contains('readme.md'));
+    });
+
+    test('should filter vault info by name', () async {
+      final testDir = Directory('${tempDir.path}/filtered_vault');
+      await testDir.create();
+
+      await repository.createVault('test-vault', testDir.path);
+      await repository.createVault('other-vault', testDir.path);
+
+      await File('${testDir.path}/test.md').writeAsString('Test content');
+
+      final filteredInfos = await repository.getVaultInfo('test-vault');
+
+      expect(filteredInfos, hasLength(1));
+      expect(filteredInfos.first.vault.name, equals('test-vault'));
+      expect(filteredInfos.first.markdownFiles, contains('test.md'));
+    });
+
+    test('should return empty list for non-existent vault filter', () async {
+      final vaultInfos = await repository.getVaultInfo('non-existent');
+      expect(vaultInfos, isEmpty);
+    });
+
+    test('should handle vault with no markdown files', () async {
+      final emptyDir = Directory('${tempDir.path}/empty_vault');
+      await emptyDir.create();
+
+      await repository.createVault('empty-vault', emptyDir.path);
+
+      // Create a non-markdown file
+      await File('${emptyDir.path}/readme.txt').writeAsString('Text file');
+
+      final vaultInfos = await repository.getVaultInfo('empty-vault');
+
+      expect(vaultInfos, hasLength(1));
+      expect(vaultInfos.first.markdownFiles, isEmpty);
     });
   });
 
@@ -329,12 +443,12 @@ void main() {
     });
 
     test('should serialize and deserialize Chunk correctly', () {
-      const chunk = EmbeddingChunk(
+      final chunk = EmbeddingChunk(
         id: 1,
         vaultId: 2,
         hash: 'test_hash',
         text: 'test text',
-        vector: [1.0, 2.0, 3.0],
+        vector: vec([1.0, 2.0, 3.0]),
       );
       final map = chunk.toMap();
       final deserialized = EmbeddingChunk.fromMap(map);
@@ -344,6 +458,16 @@ void main() {
       expect(deserialized.hash, equals(chunk.hash));
       expect(deserialized.text, equals(chunk.text));
       expect(deserialized.vector, equals(chunk.vector));
+    });
+
+    test('should create VaultInfo correctly', () {
+      const vault = Vault(id: 1, name: 'test', rootPath: '/path');
+      const markdownFiles = ['doc1.md', 'doc2.md'];
+
+      const vaultInfo = VaultInfo(vault: vault, markdownFiles: markdownFiles);
+
+      expect(vaultInfo.vault, equals(vault));
+      expect(vaultInfo.markdownFiles, equals(markdownFiles));
     });
   });
 }

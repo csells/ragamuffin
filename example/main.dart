@@ -1,15 +1,11 @@
 // ignore_for_file: avoid_print, avoid_dynamic_calls
 
-import 'dart:convert';
 import 'dart:developer' as dev;
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:dartantic_ai/dartantic_ai.dart';
 import 'package:logging/logging.dart';
 import 'package:ragamuffin/ragamuffin.dart';
-
-/*──────────────────────  CONFIG  ──────────────────────*/
 
 final openAiKey = Platform.environment['OPENAI_API_KEY'] ?? '';
 
@@ -22,21 +18,10 @@ void _setupLogging(bool enable) {
 }
 
 final _logger = Logger('ragamuffin');
-
-/*──────────────────────  REPOSITORY  ─────────────────────*/
-
-final repository = EmbeddingRepository('ragamuffin.db');
-
-/*──────────────────────  MAIN  ────────────────────────*/
+final _repository = EmbeddingRepository('ragamuffin.db');
 
 Future<void> main(List<String> argv) async {
-  if (openAiKey.isEmpty) {
-    stderr.writeln('export OPENAI_API_KEY before running.');
-    exit(64);
-  }
-  repository.initialize();
-
-  // Initialize logging as disabled by default
+  _repository.initialize();
   _setupLogging(false);
 
   if (argv.isEmpty) {
@@ -53,6 +38,13 @@ Future<void> main(List<String> argv) async {
 
   final command = argv[0];
   final args = argv.sublist(1);
+
+  // Commands that require OpenAI API key
+  const apiCommands = {'create', 'update', 'chat'};
+  if (apiCommands.contains(command) && openAiKey.isEmpty) {
+    stderr.writeln('export OPENAI_API_KEY before running.');
+    exit(64);
+  }
 
   switch (command) {
     case 'create':
@@ -85,8 +77,6 @@ Future<void> main(List<String> argv) async {
   exit(0); // otherwise the async calls can cause the process to hang
 }
 
-/*──────────────────  CREATE & UPDATE  ─────────────────*/
-
 Future<void> _createVault(
   String name,
   String root, {
@@ -105,8 +95,9 @@ Future<void> _createVault(
   }
 
   try {
-    final vault = await repository.createVault(name, root);
-    await _syncVault(vault.name, vault.rootPath);
+    final vault = await _repository.createVault(name, root);
+    final result = await _repository.syncVault(vault.name);
+    print('Vault "$name" created → added: ${result['added']} chunks');
   } on Exception catch (ex) {
     stderr.writeln('Error: Vault "$name": $ex');
     exit(1);
@@ -114,18 +105,20 @@ Future<void> _createVault(
 }
 
 Future<void> _updateVault(String name) async {
-  final vault = await repository.getVault(name);
+  final vault = await _repository.getVault(name);
   if (vault == null) {
     stderr.writeln('No vault named "$name". Run create command first.');
     exit(1);
   }
-  await _syncVault(vault.name, vault.rootPath);
+  final result = await _repository.syncVault(vault.name);
+  print(
+    'Vault "$name" updated → '
+    'added: ${result['added']}, deleted: ${result['deleted']}',
+  );
 }
 
-/*────────────────────────  DELETE  ──────────────────────*/
-
 Future<void> _deleteVault(String name, {required bool force}) async {
-  final vault = await repository.getVault(name);
+  final vault = await _repository.getVault(name);
   if (vault == null) {
     stderr.writeln('No vault named "$name".');
     exit(1);
@@ -143,141 +136,48 @@ Future<void> _deleteVault(String name, {required bool force}) async {
     }
   }
 
-  await repository.deleteVault(name);
+  await _repository.deleteVault(name);
   print('Vault "$name" deleted.');
 }
 
-/*──────────────  INDEX / SYNC SHARED LOGIC  ───────────*/
-
-Future<void> _syncVault(String name, String root) async {
-  final vault = await repository.getVault(name);
-  if (vault == null) {
-    throw ArgumentError('No vault named "$name"');
-  }
-
-  stdout.write('Scanning files...\n');
-  final disk = <String, String>{}; // hash -> text
-  final fileChunks = <String, List<String>>{}; // file -> chunks
-  final files = repository
-      .walkDirectory(root)
-      .whereType<File>()
-      .where((f) => f.path.endsWith('.md'))
-      .toList();
-
-  for (var i = 0; i < files.length; i++) {
-    final f = files[i];
-    final relativePath = f.path
-        .replaceFirst(root, '')
-        .replaceFirst(RegExp('^/+'), '');
-    stdout.write('  (${i + 1}/${files.length}) $relativePath... ');
-    final chunks = repository.chunkText(await f.readAsString());
-    fileChunks[relativePath] = chunks;
-    for (final piece in chunks) {
-      disk[sha256.convert(utf8.encode(piece)).toString()] = piece;
-    }
-    stdout.writeln('${chunks.length} chunks');
-  }
-  stdout.writeln('Scan complete.');
-
-  final dbHashes = await repository.getChunkHashes(vault.id);
-
-  var added = 0;
-  var deleted = 0;
-  final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
-
-  if (toAdd.isNotEmpty) {
-    stdout.write('\nEmbedding ${toAdd.length} chunks...\n');
-
-    // Create a map of hash -> file for each chunk
-    final chunkToFile = <String, String>{};
-    for (final entry in fileChunks.entries) {
-      for (final chunk in entry.value) {
-        chunkToFile[sha256.convert(utf8.encode(chunk)).toString()] = entry.key;
-      }
-    }
-
-    // Keep track of progress sequentially
-    var currentChunk = 0;
-    String? currentFile;
-    for (final entry in toAdd) {
-      currentChunk++;
-      final file = chunkToFile[entry.key]!;
-      if (file != currentFile) {
-        if (currentFile != null) stdout.write('\n');
-        stdout.write('  ($currentChunk/${toAdd.length}) $file... ');
-        currentFile = file;
-      }
-
-      final vec = await repository.createEmbedding(entry.value);
-      await repository.addChunk(
-        vaultId: vault.id,
-        text: entry.value,
-        vector: vec,
-      );
-      added++;
-      stdout.write('.');
-    }
-    stdout.writeln('\nEmbedding complete.');
-  }
-
-  for (final hash in dbHashes.difference(disk.keys.toSet())) {
-    await repository.deleteChunk(hash, vault.id);
-    deleted++;
-  }
-  print('\nVault "$name" sync  → added: $added  deleted: $deleted');
-}
-
-/*────────────────────────  LIST  ──────────────────────*/
-
 Future<void> _listVaults(String? filter) async {
-  final vaults = await repository.getAllVaults(filter);
+  final vaultInfos = await _repository.getVaultInfo(filter);
 
-  if (vaults.isEmpty) {
+  if (vaultInfos.isEmpty) {
     stderr.writeln(filter == null ? 'No vaults.' : 'No vault named "$filter".');
     return;
   }
-  for (final vault in vaults) {
-    print('\n🗄️  ${vault.name}  →  ${vault.rootPath}');
-    final files = repository
-        .walkDirectory(vault.rootPath)
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.md'))
-        .map(
-          (f) => f.path
-              .replaceFirst(vault.rootPath, '')
-              .replaceFirst(RegExp('^/+'), ''),
-        )
-        .toList();
-    if (files.isEmpty) print('   (no *.md)');
-    for (final f in files) {
-      print('   • $f');
+
+  for (final info in vaultInfos) {
+    print('\n🗄️  ${info.vault.name}  →  ${info.vault.rootPath}');
+    if (info.markdownFiles.isEmpty) {
+      print('   (no *.md)');
+    } else {
+      for (final file in info.markdownFiles) {
+        print('   • $file');
+      }
     }
   }
 }
 
-/*────────────────────────  CHAT  ──────────────────────*/
-
 Future<void> _chatLoop(String name) async {
-  final vault = await repository.getVault(name);
+  final vault = await _repository.getVault(name);
   if (vault == null) {
     stderr.writeln('No vault named "$name".');
     exit(1);
   }
 
-  if (await repository.isVaultStale(vault.id, vault.rootPath)) {
+  if (await _repository.isVaultStale(vault.id, vault.rootPath)) {
     stdout.writeln(
       '\x1B[33m⚠️  Vault "$name" may be out-of-date. '
       'Run: dart run ragamuffin.dart --update $name\x1B[0m',
     );
   }
 
-  final chunks = await repository.getChunks(vault.id);
-  final chunkData = chunks
-      .map((c) => _Chunk(c.text, c.vector))
-      .toList(growable: false);
+  final chunks = await _repository.getChunks(vault.id);
 
   // Initialize the dartantic_ai agent with tools
-  _initializeAgent(chunkData);
+  _initializeAgent(chunks);
 
   var msgs = <Message>[];
 
@@ -337,7 +237,7 @@ Future<void> _chatLoop(String name) async {
 late Agent _chatAgent;
 late Tool _retrieveTool;
 
-void _initializeAgent(List<_Chunk> chunks) {
+void _initializeAgent(List<EmbeddingChunk> chunks) {
   _retrieveTool = Tool(
     name: 'retrieve_chunks',
     description: 'Search for documents in the vector store',
@@ -350,8 +250,11 @@ void _initializeAgent(List<_Chunk> chunks) {
     }.toSchema(),
     onCall: (input) async {
       final query = input['query'] as String;
-      final vecQ = await repository.createEmbedding(query);
-      final hits = _rank(chunks, vecQ, 4).map((c) => c.text).join('\n---\n');
+      final vecQ = await _repository.createEmbedding(query);
+      final hits = _repository
+          .rankChunks(chunks, vecQ, 4)
+          .map((c) => c.text)
+          .join('\n---\n');
       return {'snippets': hits};
     },
   );
@@ -368,19 +271,4 @@ When asked a question:
 4. Do not make up or infer information not present in the vault
 5. Do not use any external knowledge unless it's explicitly mentioned in the vault''',
   );
-}
-
-Iterable<_Chunk> _rank(List<_Chunk> all, List<double> q, int k) {
-  final scored =
-      all
-          .map((c) => MapEntry(c, repository.cosineSimilarity(c.vec, q)))
-          .toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-  return scored.take(k).map((e) => e.key);
-}
-
-class _Chunk {
-  _Chunk(this.text, this.vec);
-  final String text;
-  final List<double> vec;
 }
