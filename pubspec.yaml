@@ -2,6 +2,7 @@ name: ragamuffin
 description: A tool for querying and updating a local database of documents.
 version: 0.1.0
 repository: https://github.com/ragamuffin-ai/ragamuffin
+publish_to: none
 
 environment:
   sdk: ^3.8.0
