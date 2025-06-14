@@ -334,18 +334,20 @@ Future<void> _chatLoop(String name) async {
   // Initialize the dartantic_ai agent with tools
   _initializeAgent(chunks);
 
-  final msgs = <Map<String, dynamic>>[
-    {
-      'role': 'system',
-      'content': '''
+  var msgs = <Message>[
+    Message(
+      role: MessageRole.system,
+      content: [
+        const TextPart('''
 You are a helpful assistant that answers questions based ONLY on the content in Chris's vault. 
 When asked a question:
 1. First, use retrieve_chunks to search for relevant information in the vault
 2. Then, answer the question using ONLY the information found in the vault
 3. If the vault doesn't contain relevant information, say so clearly
 4. Do not make up or infer information not present in the vault
-5. Do not use any external knowledge unless it's explicitly mentioned in the vault''',
-    },
+5. Do not use any external knowledge unless it's explicitly mentioned in the vault'''),
+      ],
+    ),
   ];
 
   void showHelp() {
@@ -388,61 +390,15 @@ When asked a question:
       }
     }
 
-    msgs.add({'role': 'user', 'content': q});
-    _logger.fine('Sending messages to API: ${jsonEncode(msgs)}');
 
-    final reply = await _chat(msgs);
-    _logger.fine('Received API response: ${jsonEncode(reply)}');
 
-    final choice = reply['choices'][0];
-    _logger.fine('Processing choice: ${jsonEncode(choice)}');
-
-    if (choice['finish_reason'] == 'tool_calls') {
-      // Add the assistant's message with tool_calls
-      final assistantMsg = {
-        'role': 'assistant',
-        'content': choice['message']['content'],
-        'tool_calls': choice['message']['tool_calls'],
-      };
-      _logger.fine('Adding assistant message: ${jsonEncode(assistantMsg)}');
-      msgs.add(assistantMsg);
-
-      final call = choice['message']['tool_calls'][0];
-      final query =
-          jsonDecode(call['function']['arguments'])['query'] as String;
-      final vecQ = await _embed(query);
-      final hits = _rank(chunks, vecQ, 4).map((c) => c.text).join('\n---\n');
-
-      // Add the tool's response
-      final toolMsg = {
-        'role': 'tool',
-        'tool_call_id': call['id'],
-        'content': jsonEncode({'snippets': hits}),
-      };
-      _logger.fine('Adding tool message: ${jsonEncode(toolMsg)}');
-      msgs.add(toolMsg);
-
-      // Get the final assistant response
-      _logger.fine('Sending messages for final response: ${jsonEncode(msgs)}');
-      final cont = await _chat(msgs);
-      _logger.fine('Received final response: ${jsonEncode(cont)}');
-
-      print('\n🤖  ${cont['choices'][0]['message']['content']}');
-      final finalMsg = {
-        'role': 'assistant',
-        'content': cont['choices'][0]['message']['content'],
-      };
-      _logger.fine('Adding final message: ${jsonEncode(finalMsg)}');
-      msgs.add(finalMsg);
-    } else {
-      print('\n🤖  ${choice['message']['content']}');
-      final msg = {
-        'role': 'assistant',
-        'content': choice['message']['content'],
-      };
-      _logger.fine('Adding message: ${jsonEncode(msg)}');
-      msgs.add(msg);
-    }
+    // Let dartantic_ai handle everything automatically
+    _logger.fine('Sending query to agent: $q');
+    final response = await _chatAgent.run(q, messages: msgs);
+    print('\n🤖  ${response.output}');
+    
+    // dartantic_ai automatically manages conversation state
+    msgs = response.messages;
   }
 }
 
@@ -570,26 +526,8 @@ Iterable<FileSystemEntity> _walk(String start) sync* {
   }
 }
 
-// Centralized rate limit retry helper
-Future<T> withOpenAIRateLimitRetry<T>(Future<T> Function() fn) async {
-  while (true) {
-    try {
-      return await fn();
-    } catch (e) {
-      // For now, just handle general exceptions and rethrow
-      // dartantic_ai may handle rate limiting internally
-      rethrow;
-    }
-  }
-}
-
-Future<List<double>> _embed(String text) async {
-  final agent = Agent('openai');
-  final response = await withOpenAIRateLimitRetry(
-    () async => agent.createEmbedding(text, type: EmbeddingType.document),
-  );
-  return response;
-}
+Future<List<double>> _embed(String text) =>
+    Agent('openai').createEmbedding(text, type: EmbeddingType.document);
 
 // Global agent and tool for chat functionality
 late Agent _chatAgent;
@@ -615,117 +553,6 @@ void _initializeAgent(List<_Chunk> chunks) {
   );
 
   _chatAgent = Agent('openai:gpt-4o-mini', tools: [_retrieveTool]);
-}
-
-Future<Map<String, dynamic>> _chat(List<Map<String, dynamic>> messages) async {
-  _logger.fine('DEBUG: Messages to send:');
-  for (final m in messages) {
-    _logger.fine(
-      '  Role: \x1b[36m${m['role']}\x1b[0m, Content: ${m['content']}, '
-      'Tool call ID: ${m['tool_call_id']}',
-    );
-  }
-
-  // Convert messages to dartantic_ai Message format
-  final dartanticMessages = <Message>[];
-  for (final m in messages) {
-    final role = m['role'] as String;
-    final content = m['content'] as String?;
-    final toolCallId = m['tool_call_id'] as String?;
-    final toolCalls = m['tool_calls'] as List<dynamic>?;
-
-    switch (role) {
-      case 'system':
-        dartanticMessages.add(
-          Message(role: MessageRole.system, content: [TextPart(content ?? '')]),
-        );
-      case 'user':
-        dartanticMessages.add(
-          Message(role: MessageRole.user, content: [TextPart(content ?? '')]),
-        );
-      case 'assistant':
-        final parts = <Part>[];
-        if (content?.isNotEmpty ?? false) {
-          parts.add(TextPart(content!));
-        }
-        if (toolCalls != null) {
-          for (final tc in toolCalls) {
-            parts.add(
-              ToolPart(
-                kind: ToolPartKind.call,
-                id: tc['id'] as String,
-                name: tc['function']['name'] as String,
-                arguments: jsonDecode(tc['function']['arguments'] as String),
-              ),
-            );
-          }
-        }
-        dartanticMessages.add(Message(role: MessageRole.model, content: parts));
-      case 'tool':
-        dartanticMessages.add(
-          Message(
-            role: MessageRole.model,
-            content: [
-              ToolPart(
-                kind: ToolPartKind.result,
-                id: toolCallId!,
-                name: '',
-                result: jsonDecode(content ?? '{}'),
-              ),
-            ],
-          ),
-        );
-      default:
-        throw ArgumentError('Unknown role: $role');
-    }
-  }
-
-  final response = await withOpenAIRateLimitRetry(
-    () async => _chatAgent.run('', messages: dartanticMessages),
-  );
-
-  // Convert response back to the expected format
-  final message = response.messages.last;
-  final toolParts = message.content.whereType<ToolPart>().toList();
-
-  if (toolParts.isNotEmpty &&
-      toolParts.any((p) => p.kind == ToolPartKind.call)) {
-    final toolCall = toolParts.first;
-    return {
-      'choices': [
-        {
-          'message': {
-            'role': 'assistant',
-            'content':
-                message.content.whereType<TextPart>().firstOrNull?.text ?? '',
-            'tool_calls': [
-              {
-                'id': toolCall.id,
-                'function': {
-                  'name': toolCall.name,
-                  'arguments': jsonEncode(toolCall.arguments),
-                },
-              },
-            ],
-          },
-          'finish_reason': 'tool_calls',
-        },
-      ],
-    };
-  }
-
-  return {
-    'choices': [
-      {
-        'message': {
-          'content':
-              message.content.whereType<TextPart>().firstOrNull?.text ?? '',
-          'role': 'assistant',
-        },
-        'finish_reason': 'stop',
-      },
-    ],
-  };
 }
 
 double _cosineSimilarity(List<double> a, List<double> b) {

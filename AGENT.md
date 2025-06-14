@@ -29,6 +29,7 @@
 - Use `late` for non-nullable fields initialized later.
 - Use `??=` for default values.
 - Use `??` for null-aware defaults.
+- Format code to stay within 80 characters per line.
 
 ## Key Dependencies
 - `dartantic_ai` - AI agent framework for embeddings and chat with tools
