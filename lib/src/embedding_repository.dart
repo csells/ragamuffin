@@ -8,6 +8,7 @@ import 'package:logging/logging.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import 'embedding_chunk.dart';
+import 'typed_database.dart';
 import 'vault.dart';
 import 'vault_info.dart';
 
@@ -69,12 +70,13 @@ class EmbeddingRepository {
 
   /// Get a vault by name
   Future<Vault?> getVault(String name) async {
-    final result = _db.select(
+    final query = TypedQuery(
       'SELECT id, name, root_path FROM vaults WHERE name = ?',
       [name],
+      Vault.fromMap,
     );
 
-    return result.isEmpty ? null : Vault.fromMap(result.first);
+    return _db.selectSingleTyped(query);
   }
 
   /// Check if a vault exists
@@ -85,13 +87,17 @@ class EmbeddingRepository {
 
   /// Get all vaults, optionally filtered by name
   Future<List<Vault>> getAllVaults([String? filter]) async {
-    final result = filter == null
-        ? _db.select('SELECT id, name, root_path FROM vaults')
-        : _db.select('SELECT id, name, root_path FROM vaults WHERE name = ?', [
+    final query = filter == null
+        ? const TypedQuery(
+            'SELECT id, name, root_path FROM vaults',
+            <Object?>[],
+            Vault.fromMap,
+          )
+        : TypedQuery('SELECT id, name, root_path FROM vaults WHERE name = ?', [
             filter,
-          ]);
+          ], Vault.fromMap);
 
-    return result.map(Vault.fromMap).toList();
+    return _db.selectTyped(query);
   }
 
   /// Delete a vault and all its chunks
@@ -124,12 +130,13 @@ class EmbeddingRepository {
 
   /// Get all chunks for a vault
   Future<List<EmbeddingChunk>> getChunks(int vaultId) async {
-    final result = _db.select(
+    final query = TypedQuery(
       'SELECT id, vault_id, hash, text, vec FROM chunks WHERE vault_id = ?',
       [vaultId],
+      EmbeddingChunk.fromMap,
     );
 
-    return result.map(EmbeddingChunk.fromMap).toList();
+    return _db.selectTyped(query);
   }
 
   /// Get all hashes for chunks in a vault

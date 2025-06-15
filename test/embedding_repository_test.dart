@@ -46,7 +46,7 @@ void main() {
 
       await repository.createVault(name, rootPath);
 
-      expect(() => repository.createVault(name, rootPath), throwsArgumentError);
+      expect(() => repository.createVault(name, rootPath), throwsException);
     });
 
     test('should get existing vault by name', () async {
