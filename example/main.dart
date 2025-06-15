@@ -21,6 +21,7 @@ Future<void> main(List<String> argv) async {
         ..addCommand(DeleteCommand());
 
   try {
+    initializeLogging();
     await runner.run(argv);
   } on Exception catch (e) {
     stderr.writeln('Error: $e');

@@ -4,14 +4,9 @@
 import 'package:logging/logging.dart';
 import 'package:ragamuffin/ragamuffin.dart';
 
-Logger? _logger;
-Logger get logger {
-  if (_logger == null) {
-    Logger.root.level = Level.ALL;
-    Logger.root.onRecord.listen((r) => print('${r.level.name}: ${r.message}'));
-    _logger = Logger('ragamuffin');
-  }
-  return _logger!;
+void initializeLogging() {
+  Logger.root.level = Level.ALL;
+  Logger.root.onRecord.listen((r) => print('${r.level.name}: ${r.message}'));
 }
 
 EmbeddingRepository? _repository;

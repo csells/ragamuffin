@@ -79,7 +79,7 @@ class ChatCommand extends Command<void> {
       }
 
       // Let dartantic_ai handle everything automatically
-      logger.fine('Sending query to agent: $q');
+      print('Sending query to agent: $q');
       final response = await chatAgent.run(q, messages: history);
       print('\n🤖  ${response.output}');
 
