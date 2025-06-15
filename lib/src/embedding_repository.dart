@@ -47,7 +47,7 @@ class EmbeddingRepository {
   /// Create a new vault
   Future<Vault> createVault(String name, String rootPath) async {
     if (await vaultExists(name)) {
-      throw ArgumentError('Vault "$name" already exists');
+      throw Exception('Vault "$name" already exists');
     }
 
     _db.execute('INSERT INTO vaults (name, root_path) VALUES (?, ?)', [
@@ -274,43 +274,72 @@ class EmbeddingRepository {
       throw ArgumentError('No vault named "$name"');
     }
 
-    // Scan files and create chunks
+    stdout.write('Scanning files...\n');
     final disk = <String, String>{}; // hash -> text
+    final fileChunks = <String, List<String>>{}; // file -> chunks
     final files = walkDirectory(
       vault.rootPath,
     ).whereType<File>().where((f) => f.path.endsWith('.md')).toList();
 
-    for (final file in files) {
-      final content = await file.readAsString();
-      final chunks = chunkText(content);
-      for (final chunk in chunks) {
-        final hash = sha256.convert(utf8.encode(chunk)).toString();
-        disk[hash] = chunk;
+    for (var i = 0; i < files.length; i++) {
+      final f = files[i];
+      final relativePath = f.path
+          .replaceFirst(vault.rootPath, '')
+          .replaceFirst(RegExp('^/+'), '');
+      stdout.write('  (${i + 1}/${files.length}) $relativePath... ');
+      final chunks = chunkText(await f.readAsString());
+      fileChunks[relativePath] = chunks;
+      for (final piece in chunks) {
+        disk[sha256.convert(utf8.encode(piece)).toString()] = piece;
       }
+      stdout.writeln('${chunks.length} chunks');
     }
+    stdout.writeln('Scan complete.');
 
-    // Get existing chunks
     final dbHashes = await getChunkHashes(vault.id);
 
-    // Calculate what to add and delete
-    final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
-    final toDelete = dbHashes.difference(disk.keys.toSet());
-
-    // Add new chunks
     var added = 0;
-    for (final entry in toAdd) {
-      final vector = await createEmbedding(entry.value);
-      await addChunk(vaultId: vault.id, text: entry.value, vector: vector);
-      added++;
+    var deleted = 0;
+    final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
+
+    if (toAdd.isNotEmpty) {
+      stdout.write('\nEmbedding ${toAdd.length} chunks...\n');
+
+      // Create a map of hash -> file for each chunk
+      final chunkToFile = <String, String>{};
+      for (final entry in fileChunks.entries) {
+        for (final chunk in entry.value) {
+          chunkToFile[sha256.convert(utf8.encode(chunk)).toString()] = entry.key;
+        }
+      }
+
+      // Keep track of progress sequentially
+      var currentChunk = 0;
+      String? currentFile;
+      for (final entry in toAdd) {
+        currentChunk++;
+        final file = chunkToFile[entry.key]!;
+        if (file != currentFile) {
+          if (currentFile != null) stdout.write('\n');
+          stdout.write('  ($currentChunk/${toAdd.length}) $file... ');
+          currentFile = file;
+        }
+
+        final vector = await createEmbedding(entry.value);
+        await addChunk(vaultId: vault.id, text: entry.value, vector: vector);
+        added++;
+        stdout.write('.');
+      }
+      stdout.writeln('\nEmbedding complete.');
     }
 
-    // Delete removed chunks
-    var deleted = 0;
+    final toDelete = dbHashes.difference(disk.keys.toSet());
     for (final hash in toDelete) {
       await deleteChunk(hash, vault.id);
       deleted++;
     }
-
+    
+    print('\nVault "$name" sync  → added: $added  deleted: $deleted');
     return {'added': added, 'deleted': deleted};
   }
 

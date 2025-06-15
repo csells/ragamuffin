@@ -10,3 +10,4 @@ pubspec.lock
 .vscode/
 
 ragamuffin.db
+run-create.sh

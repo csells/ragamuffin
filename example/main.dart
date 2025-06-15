@@ -3,6 +3,7 @@
 import 'dart:developer' as dev;
 import 'dart:io';
 
+import 'package:args/command_runner.dart';
 import 'package:dartantic_ai/dartantic_ai.dart';
 import 'package:logging/logging.dart';
 import 'package:ragamuffin/ragamuffin.dart';
@@ -24,57 +25,139 @@ Future<void> main(List<String> argv) async {
   _repository.initialize();
   _setupLogging(false);
 
-  if (argv.isEmpty) {
-    stderr.writeln(
-      'Usage:\n'
-      '  create <name> <file|dir>   [--yes]\n'
-      '  update <name>\n'
-      '  chat   <name>\n'
-      '  list   [name]\n'
-      '  delete <name> [--yes]',
-    );
-    exit(64);
-  }
+  final runner =
+      CommandRunner<void>('ragamuffin', 'A CLI RAG tool for querying documents')
+        ..addCommand(_CreateCommand())
+        ..addCommand(_UpdateCommand())
+        ..addCommand(_ChatCommand())
+        ..addCommand(_ListCommand())
+        ..addCommand(_DeleteCommand());
 
-  final command = argv[0];
-  final args = argv.sublist(1);
-
-  // Commands that require OpenAI API key
-  const apiCommands = {'create', 'update', 'chat'};
-  if (apiCommands.contains(command) && openAiKey.isEmpty) {
-    stderr.writeln('export OPENAI_API_KEY before running.');
-    exit(64);
-  }
-
-  switch (command) {
-    case 'create':
-      if (args.length < 2) exit(64);
-      await _createVault(args[0], args[1], force: args.contains('--yes'));
-    case 'update':
-      if (args.isEmpty) exit(64);
-      await _updateVault(args[0]);
-    case 'chat':
-      if (args.isEmpty) exit(64);
-      await _chatLoop(args[0]);
-    case 'list':
-      await _listVaults(args.isNotEmpty ? args[0] : null);
-    case 'delete':
-      if (args.isEmpty) exit(64);
-      await _deleteVault(args[0], force: args.contains('--yes'));
-    default:
-      stderr.writeln('Unknown command: $command');
-      stderr.writeln(
-        'Usage:\n'
-        '  create <name> <file|dir>   [--yes]\n'
-        '  update <name>\n'
-        '  chat   <name>\n'
-        '  list   [name]\n'
-        '  delete <name> [--yes]',
-      );
-      exit(64);
+  try {
+    await runner.run(argv);
+  } on Exception catch (e) {
+    stderr.writeln('Error: $e');
+    exit(1);
   }
 
   exit(0); // otherwise the async calls can cause the process to hang
+}
+
+void _requireApiKey() {
+  if (openAiKey.isEmpty) {
+    throw UsageException(
+      'export OPENAI_API_KEY before running.',
+      'Missing required environment variable',
+    );
+  }
+}
+
+class _CreateCommand extends Command<void> {
+  _CreateCommand() {
+    argParser.addFlag('yes', abbr: 'y', help: 'Skip confirmation prompt');
+  }
+
+  @override
+  String get name => 'create';
+
+  @override
+  String get description => 'Create a new vault from files in a directory';
+
+  @override
+  Future<void> run() async {
+    print('DEBUG: CreateCommand.run() started');
+    _requireApiKey();
+    print('DEBUG: API key check passed');
+
+    if (argResults!.rest.length < 2) {
+      usageException('Usage: create <name> <file|dir>');
+    }
+
+    final name = argResults!.rest[0];
+    final root = argResults!.rest[1];
+    final force = argResults!['yes'] as bool;
+
+    print('DEBUG: About to call _createVault($name, $root, force: $force)');
+    await _createVault(name, root, force: force);
+    print('DEBUG: _createVault completed');
+  }
+}
+
+class _UpdateCommand extends Command<void> {
+  @override
+  String get name => 'update';
+
+  @override
+  String get description => 'Update an existing vault with file changes';
+
+  @override
+  Future<void> run() async {
+    _requireApiKey();
+
+    if (argResults!.rest.isEmpty) {
+      usageException('Usage: update <name>');
+    }
+
+    final name = argResults!.rest[0];
+    await _updateVault(name);
+  }
+}
+
+class _ChatCommand extends Command<void> {
+  @override
+  String get name => 'chat';
+
+  @override
+  String get description => 'Start an interactive chat session with a vault';
+
+  @override
+  Future<void> run() async {
+    _requireApiKey();
+
+    if (argResults!.rest.isEmpty) {
+      usageException('Usage: chat <name>');
+    }
+
+    final name = argResults!.rest[0];
+    await _chatLoop(name);
+  }
+}
+
+class _ListCommand extends Command<void> {
+  @override
+  String get name => 'list';
+
+  @override
+  String get description => 'List vaults or show details for a specific vault';
+
+  @override
+  Future<void> run() async {
+    final filter = argResults!.rest.isNotEmpty ? argResults!.rest[0] : null;
+    await _listVaults(filter);
+  }
+}
+
+class _DeleteCommand extends Command<void> {
+  _DeleteCommand() {
+    argParser.addFlag('yes', abbr: 'y', help: 'Skip confirmation prompt');
+  }
+
+  @override
+  String get name => 'delete';
+
+  @override
+  String get description => 'Delete a vault and all its chunks';
+
+  @override
+  Future<void> run() async {
+    if (argResults!.rest.isEmpty) {
+      usageException('Usage: delete <name>');
+    }
+
+    final name = argResults!.rest[0];
+    final force = argResults!['yes'] as bool;
+    await _deleteVault(name, force: force);
+  }
 }
 
 Future<void> _createVault(
@@ -82,7 +165,12 @@ Future<void> _createVault(
   String root, {
   required bool force,
 }) async {
+  print(
+    'DEBUG: _createVault started with name=$name, root=$root, force=$force',
+  );
+
   if (!force) {
+    print('DEBUG: force=false, asking for confirmation');
     stdout.write(
       '⚠️  Your files will be sent to OpenAI to generate embeddings.\n'
       'Continue? (y/N) ',
@@ -92,16 +180,23 @@ Future<void> _createVault(
       stdout.writeln('Aborted.');
       exit(0);
     }
+  } else {
+    print('DEBUG: force=true, skipping confirmation');
   }
 
+  print('DEBUG: About to call _repository.createVault');
   try {
     final vault = await _repository.createVault(name, root);
+    print('DEBUG: createVault succeeded, about to call syncVault');
     final result = await _repository.syncVault(vault.name);
+    print('DEBUG: syncVault completed');
     print('Vault "$name" created → added: ${result['added']} chunks');
   } on Exception catch (ex) {
+    print('DEBUG: Exception caught: $ex');
     stderr.writeln('Error: Vault "$name": $ex');
     exit(1);
   }
+  print('DEBUG: _createVault finished');
 }
 
 Future<void> _updateVault(String name) async {
