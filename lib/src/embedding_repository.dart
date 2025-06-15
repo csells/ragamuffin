@@ -4,11 +4,15 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:dartantic_ai/dartantic_ai.dart';
+import 'package:logging/logging.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import 'embedding_chunk.dart';
 import 'vault.dart';
 import 'vault_info.dart';
+
+Logger? _loggerInstance;
+Logger get _logger => _loggerInstance ??= Logger('ragamuffin');
 
 /// Repository for managing embeddings and vector operations
 class EmbeddingRepository {
@@ -274,7 +278,7 @@ class EmbeddingRepository {
       throw ArgumentError('No vault named "$name"');
     }
 
-    stdout.write('Scanning files...\n');
+    _logger.log(Level.INFO, 'Scanning files...');
     final disk = <String, String>{}; // hash -> text
     final fileChunks = <String, List<String>>{}; // file -> chunks
     final files = walkDirectory(
@@ -286,15 +290,15 @@ class EmbeddingRepository {
       final relativePath = f.path
           .replaceFirst(vault.rootPath, '')
           .replaceFirst(RegExp('^/+'), '');
-      stdout.write('  (${i + 1}/${files.length}) $relativePath... ');
+      _logger.log(Level.INFO, '  (${i + 1}/${files.length}) $relativePath... ');
       final chunks = chunkText(await f.readAsString());
       fileChunks[relativePath] = chunks;
       for (final piece in chunks) {
         disk[sha256.convert(utf8.encode(piece)).toString()] = piece;
       }
-      stdout.writeln('${chunks.length} chunks');
+      _logger.log(Level.INFO, '${chunks.length} chunks');
     }
-    stdout.writeln('Scan complete.');
+    _logger.log(Level.INFO, 'Scan complete.');
 
     final dbHashes = await getChunkHashes(vault.id);
 
@@ -303,7 +307,7 @@ class EmbeddingRepository {
     final toAdd = disk.entries.where((e) => !dbHashes.contains(e.key)).toList();
 
     if (toAdd.isNotEmpty) {
-      stdout.write('\nEmbedding ${toAdd.length} chunks...\n');
+      _logger.log(Level.INFO, '\nEmbedding ${toAdd.length} chunks...\n');
 
       // Create a map of hash -> file for each chunk
       final chunkToFile = <String, String>{};
@@ -321,17 +325,18 @@ class EmbeddingRepository {
         currentChunk++;
         final file = chunkToFile[entry.key]!;
         if (file != currentFile) {
-          if (currentFile != null) stdout.write('\n');
-          stdout.write('  ($currentChunk/${toAdd.length}) $file... ');
+          _logger.log(
+            Level.INFO,
+            '  ($currentChunk/${toAdd.length}) $file... ',
+          );
           currentFile = file;
         }
 
         final vector = await createEmbedding(entry.value);
         await addChunk(vaultId: vault.id, text: entry.value, vector: vector);
         added++;
-        stdout.write('.');
       }
-      stdout.writeln('\nEmbedding complete.');
+      _logger.log(Level.INFO, '\nEmbedding complete.');
     }
 
     final toDelete = dbHashes.difference(disk.keys.toSet());
@@ -340,7 +345,10 @@ class EmbeddingRepository {
       deleted++;
     }
 
-    stdout.writeln('\nVault "$name" sync  → added: $added  deleted: $deleted');
+    _logger.log(
+      Level.INFO,
+      '\nVault "$name" sync  → added: $added  deleted: $deleted',
+    );
     return {'added': added, 'deleted': deleted};
   }
 
