@@ -309,7 +309,8 @@ class EmbeddingRepository {
       final chunkToFile = <String, String>{};
       for (final entry in fileChunks.entries) {
         for (final chunk in entry.value) {
-          chunkToFile[sha256.convert(utf8.encode(chunk)).toString()] = entry.key;
+          chunkToFile[sha256.convert(utf8.encode(chunk)).toString()] =
+              entry.key;
         }
       }
 
@@ -338,8 +339,8 @@ class EmbeddingRepository {
       await deleteChunk(hash, vault.id);
       deleted++;
     }
-    
-    print('\nVault "$name" sync  → added: $added  deleted: $deleted');
+
+    stdout.writeln('\nVault "$name" sync  → added: $added  deleted: $deleted');
     return {'added': added, 'deleted': deleted};
   }
 

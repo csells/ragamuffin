@@ -65,9 +65,7 @@ class _CreateCommand extends Command<void> {
 
   @override
   Future<void> run() async {
-    print('DEBUG: CreateCommand.run() started');
     _requireApiKey();
-    print('DEBUG: API key check passed');
 
     if (argResults!.rest.length < 2) {
       usageException('Usage: create <name> <file|dir>');
@@ -77,9 +75,7 @@ class _CreateCommand extends Command<void> {
     final root = argResults!.rest[1];
     final force = argResults!['yes'] as bool;
 
-    print('DEBUG: About to call _createVault($name, $root, force: $force)');
     await _createVault(name, root, force: force);
-    print('DEBUG: _createVault completed');
   }
 }
 
@@ -165,12 +161,7 @@ Future<void> _createVault(
   String root, {
   required bool force,
 }) async {
-  print(
-    'DEBUG: _createVault started with name=$name, root=$root, force=$force',
-  );
-
   if (!force) {
-    print('DEBUG: force=false, asking for confirmation');
     stdout.write(
       '⚠️  Your files will be sent to OpenAI to generate embeddings.\n'
       'Continue? (y/N) ',
@@ -180,23 +171,16 @@ Future<void> _createVault(
       stdout.writeln('Aborted.');
       exit(0);
     }
-  } else {
-    print('DEBUG: force=true, skipping confirmation');
   }
 
-  print('DEBUG: About to call _repository.createVault');
   try {
     final vault = await _repository.createVault(name, root);
-    print('DEBUG: createVault succeeded, about to call syncVault');
     final result = await _repository.syncVault(vault.name);
-    print('DEBUG: syncVault completed');
     print('Vault "$name" created → added: ${result['added']} chunks');
   } on Exception catch (ex) {
-    print('DEBUG: Exception caught: $ex');
     stderr.writeln('Error: Vault "$name": $ex');
     exit(1);
   }
-  print('DEBUG: _createVault finished');
 }
 
 Future<void> _updateVault(String name) async {
