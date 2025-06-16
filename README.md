@@ -1,15 +1,15 @@
 # Ragamuffin
 
-A Dart library for Retrieval-Augmented Generation (RAG) that provides local embedding storage with multi-provider AI integration (OpenAI, Gemini, etc.), designed for efficient document querying with minimal cloud costs.
+A Dart package for Retrieval-Augmented Generation (RAG) that provides local
+embedding storage with multi-provider AI integration via [the dartantic_ai
+package](https://pub.dev/packages/dartantic_ai), designed for efficient document
+querying with minimal cloud costs.
 
 ## Features
 
 - 🔒 **Local Storage**: Stores embeddings in SQLite, only re-embedding on changes
 - 🎯 **Smart Retrieval**: Support for targeted retrieval through cosine similarity ranking
 - 🚀 **Cross-Platform**: Pure Dart implementation runs on macOS, Windows, and Linux
-- ⚡ **Efficient**: Only incurs cloud costs for embedding and inference
-- 🧪 **Well-Tested**: Comprehensive test suite with 29 passing tests
-- 📚 **Clean API**: Repository pattern with typed database operations
 
 ## Installation
 
@@ -105,46 +105,10 @@ final chatAgent = ChatAgent(repository, chunks);
 // and can be integrated with dartantic_ai messaging systems
 ```
 
-## API Reference
-
-### EmbeddingRepository
-
-Core repository class for managing vaults, chunks, and embeddings.
-
-**Key Methods:**
-- `initialize()` - Initialize database and create tables
-- `createVault(name, rootPath)` - Create new vault
-- `getVault(name)` - Retrieve vault by name
-- `addChunk({vaultId, text, vector})` - Add text chunk with embedding
-- `getChunks(vaultId)` - Get all chunks for vault
-- `createEmbedding(text)` - Generate OpenAI embedding
-- `rankChunks(chunks, queryVector, topK)` - Rank by cosine similarity
-- `syncVault(name)` - Sync vault with file system
-- `isVaultStale(vaultId, rootPath)` - Check if files changed
-
-### Data Models
-
-- **Vault**: Represents a collection of documents with `id`, `name`, and `rootPath`
-- **EmbeddingChunk**: Text chunk with embedding vector, includes `id`, `vaultId`, `hash`, `text`, and `vector` 
-- **VaultInfo**: Extended vault information including file lists
-
-### ChatAgent
-
-Provides retrieval functionality for chat interactions with access to document chunks.
-
-## Technical Details
-
-- Multi-provider AI support via dartantic_ai (OpenAI, Gemini, etc.)
-- Default: Gemini embeddings, configurable via `--model` flag
-- SQLite database with `vaults` and `chunks` tables
-- Text chunking with ~6000 token limit per chunk
-- Cosine similarity ranking for retrieval
-- Memory footprint < 300 MB during cosine search
-- Built with pure Dart (no FFI, no external binaries)
-
 ## Example CLI Tool
 
-The repository includes a sample CLI application in the `example/` directory that demonstrates the library's capabilities.
+The repository includes a sample CLI application in the `example/` directory
+that demonstrates the library's capabilities.
 
 ### Running the Example
 
@@ -165,7 +129,7 @@ dart run example/main.dart [command]
 ### Global Options
 
 - `-m, --model` - Specify AI provider and model (defaults to "gemini")
-  - Examples: `openai`, `gemini:gemini-2.5-flash`, `anthropic:claude-3-haiku`
+  - Examples: `openai`, `gemini:gemini-2.5-flash`
 
 ### Example CLI Usage
 
@@ -189,7 +153,8 @@ dart run example/main.dart list
 dart run example/main.dart --help
 ```
 
-The CLI tool demonstrates practical usage patterns and can serve as a reference implementation for your own applications.
+The CLI tool demonstrates practical usage patterns and can serve as a reference
+implementation for your own applications.
 
 ## Environment Setup
 
@@ -199,22 +164,10 @@ Set the appropriate API key for your chosen provider:
 export OPENAI_API_KEY=your_api_key_here
 ```
 
-## Privacy & Security
-
-- You'll be warned when text will be sent to your chosen AI provider for embedding
-- Only embeddings and plain text are stored locally  
-- No API keys are stored in the database
-- Delete the database file to wipe all vectors
-
-## Requirements
-
-- Dart SDK 3.0+
-- API key for your chosen provider (Gemini, OpenAI, Anthropic, etc.)
-- SQLite3 (included via sqlite3 package)
-
 ## Contributing
 
-Issues and pull requests welcome! This library follows standard Dart conventions and includes comprehensive tests.
+Issues and pull requests welcome! This library follows standard Dart conventions
+and includes comprehensive tests.
 
 ## License
 
