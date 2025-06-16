@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print, avoid_dynamic_calls
+// ignore_for_file: avoid_print
 
 import 'dart:io';
 
@@ -26,6 +26,8 @@ class CreateCommand extends Command<void> {
     final name = argResults!.rest[0];
     final root = argResults!.rest[1];
     final force = argResults!['yes'] as bool;
+    final model = globalResults!['model'] as String;
+    initRepository(model);
 
     await _createVault(name, root, force: force);
   }

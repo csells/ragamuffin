@@ -18,9 +18,10 @@ Logger get _logger => _loggerInstance ??= Logger('ragamuffin');
 /// Repository for managing embeddings and vector operations
 class EmbeddingRepository {
   /// Creates a new embedding repository with the specified database path.
-  EmbeddingRepository(this._dbPath);
+  EmbeddingRepository(this._dbPath, [this._agent]);
 
   final String _dbPath;
+  final Agent? _agent;
   late final Database _db;
 
   /// Initialize the database and create tables
@@ -158,9 +159,11 @@ class EmbeddingRepository {
 
   /// Generate embedding for text using dartantic_ai
   Future<Float64List> createEmbedding(String text) async {
-    final embedding = await Agent(
-      'openai',
-    ).createEmbedding(text, type: EmbeddingType.document);
+    final agent = _agent ?? Agent('openai');
+    final embedding = await agent.createEmbedding(
+      text,
+      type: EmbeddingType.document,
+    );
     return Float64List.fromList(embedding);
   }
 

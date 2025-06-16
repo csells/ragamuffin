@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print, avoid_dynamic_calls
+// ignore_for_file: avoid_print
 
 import 'dart:io';
 
@@ -25,6 +25,8 @@ class DeleteCommand extends Command<void> {
 
     final name = argResults!.rest[0];
     final force = argResults!['yes'] as bool;
+    final model = globalResults!['model'] as String;
+    initRepository(model);
     await _deleteVault(name, force: force);
   }
 

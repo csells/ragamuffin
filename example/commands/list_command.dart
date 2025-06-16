@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print, avoid_dynamic_calls
+// ignore_for_file: avoid_print
 
 import 'dart:io';
 
@@ -16,6 +16,8 @@ class ListCommand extends Command<void> {
   @override
   Future<void> run() async {
     final filter = argResults!.rest.isNotEmpty ? argResults!.rest[0] : null;
+    final model = globalResults!['model'] as String;
+    initRepository(model);
     await _listVaults(filter);
   }
 

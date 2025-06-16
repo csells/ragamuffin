@@ -1,3 +1,18 @@
+## 0.2.0
+
+### 🔧 Fixes
+- Fixed CLI help functionality - now properly displays usage information with `--help`, `-h`, or when run without parameters
+- No longer requires API key to view help information
+
+### ✨ Enhancements  
+- Added multi-provider AI support via dartantic_ai integration
+- Default model changed from OpenAI to Gemini (gemini:gemini-2.5-flash)
+- Support for custom model specification via `--model` flag (e.g., `openai`, `gemini:gemini-2.5-flash`)
+
+### 🔄 Breaking Changes
+- Environment variable changed from `OPENAI_API_KEY` to provider-specific keys (e.g., `GEMINI_API_KEY` for default)
+- Library now requires dartantic_ai Agent initialization instead of direct OpenAI client
+
 ## 0.1.0
 
 ### 🎉 Initial Release

@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print, avoid_dynamic_calls
+// ignore_for_file: avoid_print
 
 import 'dart:io';
 
@@ -22,10 +22,12 @@ class ChatCommand extends Command<void> {
     }
 
     final name = argResults!.rest[0];
-    await _chatLoop(name);
+    final model = globalResults!['model'] as String;
+    initRepository(model);
+    await _chatLoop(name, model);
   }
 
-  Future<void> _chatLoop(String name) async {
+  Future<void> _chatLoop(String name, String model) async {
     final vault = await repository.getVault(name);
     if (vault == null) {
       stderr.writeln('No vault named "$name".');
@@ -42,7 +44,7 @@ class ChatCommand extends Command<void> {
     final chunks = await repository.getChunks(vault.id);
 
     // Initialize the chat agent with tools
-    final chatAgent = ChatAgent(repository, chunks);
+    final chatAgent = ChatAgent(repository, model, chunks);
     var history = <Message>[];
 
     void showHelp() {
@@ -79,7 +81,6 @@ class ChatCommand extends Command<void> {
       }
 
       // Let dartantic_ai handle everything automatically
-      print('Sending query to agent: $q');
       final response = await chatAgent.run(q, messages: history);
       print('\n🤖  ${response.output}');
 

@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print, avoid_dynamic_calls
+// ignore_for_file: avoid_print
 
 import 'dart:io';
 
@@ -20,6 +20,8 @@ class UpdateCommand extends Command<void> {
     }
 
     final name = argResults!.rest[0];
+    final model = globalResults!['model'] as String;
+    initRepository(model);
     await _updateVault(name);
   }
 

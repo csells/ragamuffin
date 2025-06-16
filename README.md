@@ -1,96 +1,199 @@
 # Ragamuffin
 
-A portable, developer-friendly RAG (Retrieval-Augmented Generation) tool for interrogating personal text files with LLM assistance, while minimizing cloud costs.
+A Dart library for Retrieval-Augmented Generation (RAG) that provides local embedding storage with multi-provider AI integration (OpenAI, Gemini, etc.), designed for efficient document querying with minimal cloud costs.
 
 ## Features
 
 - 🔒 **Local Storage**: Stores embeddings in SQLite, only re-embedding on changes
-- 🎯 **Smart Retrieval**: LLM performs targeted retrieval through OpenAI function calls
-- 🚀 **Cross-Platform**: Runs identically on macOS, Windows, and Linux
-- 📝 **Scriptable**: Command-line interface with no server or browser UI required
+- 🎯 **Smart Retrieval**: Support for targeted retrieval through cosine similarity ranking
+- 🚀 **Cross-Platform**: Pure Dart implementation runs on macOS, Windows, and Linux
 - ⚡ **Efficient**: Only incurs cloud costs for embedding and inference
-- 🧪 **Well-Tested**: Comprehensive test suite with 22 passing tests
-- 📚 **Library**: Clean repository pattern for reusable embedding functionality
+- 🧪 **Well-Tested**: Comprehensive test suite with 29 passing tests
+- 📚 **Clean API**: Repository pattern with typed database operations
 
 ## Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/csells/ragamuffin.git
-cd ragamuffin
+Add this to your `pubspec.yaml`:
 
-# Run directly with Dart
-dart run example/main.dart [command]
+```yaml
+dependencies:
+  ragamuffin:
+    git: https://github.com/csells/ragamuffin.git
+```
+
+Then run:
+```bash
+dart pub get
 ```
 
 ## Usage
 
-### Create a Vault
+### Basic Setup
 
-```bash
-dart run example/main.dart create my-vault ~/Notes --yes
+```dart
+import 'package:ragamuffin/ragamuffin.dart';
+import 'package:dartantic_ai/dartantic_ai.dart';
+
+// Initialize repository with AI agent
+final agent = Agent('gemini'); // or 'openai', 'gemini:gemini-2.5-flash', etc.
+final repository = EmbeddingRepository('my_app.db', agent);
+repository.initialize();
+
+// Set up environment
+// Ensure appropriate API key is set (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
 ```
 
-This will:
-- Create a new vault named "my-vault"
-- Scan the specified directory for markdown files
-- Embed all text chunks using OpenAI's text-embedding-3-small
-- Store vectors and text locally in SQLite
-- Ask for confirmation before sending data to OpenAI (unless `--yes` is provided)
+### Creating and Managing Vaults
 
-### Update a Vault
+```dart
+// Create a vault
+final vault = await repository.createVault('my-vault', '/path/to/docs');
 
-```bash
-dart run example/main.dart update my-vault
+// Check if vault exists
+final exists = await repository.vaultExists('my-vault');
+
+// Get vault by name
+final vault = await repository.getVault('my-vault');
+
+// List all vaults
+final vaults = await repository.getAllVaults();
+
+// Delete a vault
+await repository.deleteVault('my-vault');
 ```
 
-This will:
-- Add new chunks for files that have been added
-- Re-embed chunks for files that have changed
-- Delete chunks for files that have been removed
-- Print delta counts showing what was added/removed
+### Working with Embeddings and Chunks
 
-### Chat with Your Vault
+```dart
+// Generate embedding for text
+final embedding = await repository.createEmbedding('Your text content');
 
-```bash
-dart run example/main.dart chat my-vault
+// Add chunk with embedding
+await repository.addChunk(
+  vaultId: vault.id,
+  text: 'Your text content',
+  vector: embedding,
+);
+
+// Get all chunks for a vault
+final chunks = await repository.getChunks(vault.id);
+
+// Rank chunks by similarity to query
+final queryVector = await repository.createEmbedding('search query');
+final rankedChunks = repository.rankChunks(chunks, queryVector, 5);
 ```
 
-This will:
-- Check for any changes in the vault files
-- Warn if the vault is stale and suggest running update
-- Enter a REPL where you can chat with GPT-4o-mini
-- The LLM will automatically retrieve relevant chunks using the `retrieve_chunks` tool
-- Type `/help` for available commands, `/exit` to quit, `/debug` to toggle logging
+### Vault Synchronization
 
-### List Vaults
+```dart
+// Sync vault with file system (add/update/remove chunks)
+final result = await repository.syncVault('my-vault');
+print('Added: ${result['added']}, Updated: ${result['updated']}, Deleted: ${result['deleted']}');
+
+// Check if vault is stale (files changed on disk)
+final isStale = await repository.isVaultStale(vault.id, vault.rootPath);
+```
+
+### Chat Integration
+
+```dart
+// Initialize chat agent with chunks
+final chunks = await repository.getChunks(vault.id);
+final chatAgent = ChatAgent(repository, chunks);
+
+// The ChatAgent provides retrieval functionality for LLM conversations
+// and can be integrated with dartantic_ai messaging systems
+```
+
+## API Reference
+
+### EmbeddingRepository
+
+Core repository class for managing vaults, chunks, and embeddings.
+
+**Key Methods:**
+- `initialize()` - Initialize database and create tables
+- `createVault(name, rootPath)` - Create new vault
+- `getVault(name)` - Retrieve vault by name
+- `addChunk({vaultId, text, vector})` - Add text chunk with embedding
+- `getChunks(vaultId)` - Get all chunks for vault
+- `createEmbedding(text)` - Generate OpenAI embedding
+- `rankChunks(chunks, queryVector, topK)` - Rank by cosine similarity
+- `syncVault(name)` - Sync vault with file system
+- `isVaultStale(vaultId, rootPath)` - Check if files changed
+
+### Data Models
+
+- **Vault**: Represents a collection of documents with `id`, `name`, and `rootPath`
+- **EmbeddingChunk**: Text chunk with embedding vector, includes `id`, `vaultId`, `hash`, `text`, and `vector` 
+- **VaultInfo**: Extended vault information including file lists
+
+### ChatAgent
+
+Provides retrieval functionality for chat interactions with access to document chunks.
+
+## Technical Details
+
+- Multi-provider AI support via dartantic_ai (OpenAI, Gemini, etc.)
+- Default: Gemini embeddings, configurable via `--model` flag
+- SQLite database with `vaults` and `chunks` tables
+- Text chunking with ~6000 token limit per chunk
+- Cosine similarity ranking for retrieval
+- Memory footprint < 300 MB during cosine search
+- Built with pure Dart (no FFI, no external binaries)
+
+## Example CLI Tool
+
+The repository includes a sample CLI application in the `example/` directory that demonstrates the library's capabilities.
+
+### Running the Example
 
 ```bash
+git clone https://github.com/csells/ragamuffin.git
+cd ragamuffin
+dart run example/main.dart [command]
+```
+
+### Available Commands
+
+- **create** `<name> <path> [--yes]` - Create a new vault from files in a directory
+- **update** `<name>` - Sync vault with file system changes  
+- **chat** `<name>` - Start interactive chat session with vault
+- **list** `[name]` - List vaults and their contents
+- **delete** `<name> [--yes]` - Delete vault and all chunks
+
+### Global Options
+
+- `-m, --model` - Specify AI provider and model (defaults to "gemini")
+  - Examples: `openai`, `gemini:gemini-2.5-flash`, `anthropic:claude-3-haiku`
+
+### Example CLI Usage
+
+```bash
+# Create vault from directory (using default Gemini)
+dart run example/main.dart create my-notes ~/Documents/Notes --yes
+
+# Create vault using OpenAI
+dart run example/main.dart --model openai create my-notes ~/Documents/Notes --yes
+
+# Update vault after file changes
+dart run example/main.dart update my-notes
+
+# Chat with your documents
+dart run example/main.dart chat my-notes
+
 # List all vaults
 dart run example/main.dart list
 
-# List specific vault details
-dart run example/main.dart list my-vault
+# Get help
+dart run example/main.dart --help
 ```
 
-This will show:
-- Vault names and root paths
-- Relative paths of all markdown files in each vault
-
-### Delete a Vault
-
-```bash
-dart run example/main.dart delete my-vault --yes
-```
-
-This will:
-- Delete the vault and all its chunks from the database
-- Prompt for confirmation unless `--yes` is provided
-- Fail if the vault doesn't exist
+The CLI tool demonstrates practical usage patterns and can serve as a reference implementation for your own applications.
 
 ## Environment Setup
 
-Set your OpenAI API key:
+Set the appropriate API key for your chosen provider:
 
 ```bash
 export OPENAI_API_KEY=your_api_key_here
@@ -98,52 +201,21 @@ export OPENAI_API_KEY=your_api_key_here
 
 ## Privacy & Security
 
-- You'll be warned once per vault that text will be sent to OpenAI
-- Only embeddings and plain text are stored locally
+- You'll be warned when text will be sent to your chosen AI provider for embedding
+- Only embeddings and plain text are stored locally  
 - No API keys are stored in the database
-- Delete `ragamuffin.db` to wipe all vectors
+- Delete the database file to wipe all vectors
 
-## Technical Details
+## Requirements
 
-- Uses OpenAI's text-embedding-3-small (1536-dim) for embeddings
-- Uses GPT-4o-mini with function-calling capabilities
-- Memory footprint < 300 MB during cosine search
-- Cold "create" for a 5 MB vault completes in under two minutes
-- Built with pure Dart (no FFI, no external binaries)
-- SQLite database with `vaults` and `chunks` tables
-- Text chunking with ~6000 token limit per chunk
-- Cosine similarity ranking for retrieval
+- Dart SDK 3.0+
+- API key for your chosen provider (Gemini, OpenAI, Anthropic, etc.)
+- SQLite3 (included via sqlite3 package)
 
-## Library Usage
+## Contributing
 
-Ragamuffin can also be used as a library in your Dart projects:
+Issues and pull requests welcome! This library follows standard Dart conventions and includes comprehensive tests.
 
-```dart
-import 'package:ragamuffin/ragamuffin.dart';
+## License
 
-final repository = EmbeddingRepository('my_app.db');
-repository.initialize();
-
-// Create a vault
-final vault = await repository.createVault('my-vault', '/path/to/docs');
-
-// Add chunks with embeddings
-await repository.addChunk(
-  vaultId: vault.id,
-  text: 'Your text content',
-  vector: await repository.createEmbedding('Your text content'),
-);
-
-// Search and rank chunks
-final chunks = await repository.getChunks(vault.id);
-final queryVector = await repository.createEmbedding('search query');
-final ranked = repository.rankChunks(chunks, queryVector, 5);
-```
-
-## Future Plans
-
-- Switchable embedding provider (Gemini compatibility)
-- ANN index (HNSW) for larger chunk counts
-- PDF chunker with text-position citations
-- Image embeddings using image descriptions
-- Optional local LLM via llama_cpp for offline answers
+MIT License - see LICENSE file for details.

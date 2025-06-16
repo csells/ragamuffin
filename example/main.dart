@@ -1,4 +1,4 @@
-// ignore_for_file: avoid_print, avoid_dynamic_calls
+// ignore_for_file: avoid_print
 
 import 'dart:io';
 
@@ -20,14 +20,34 @@ Future<void> main(List<String> argv) async {
         ..addCommand(ListCommand())
         ..addCommand(DeleteCommand());
 
+  runner.argParser.addOption(
+    'model',
+    abbr: 'm',
+    defaultsTo: 'openai',
+    help:
+        'Provider and, optionally, model to use '
+        '(e.g., openai, gemini:gemini-2.5-flash, etc.)',
+  );
+
   try {
-    initializeLogging();
+    initLogging();
+
+    // Handle help and empty args before parsing
+    if (argv.isEmpty || argv.contains('--help') || argv.contains('-h')) {
+      runner.printUsage();
+      return;
+    }
+
     await runner.run(argv);
+  } on UsageException catch (e) {
+    stderr.writeln('${e.message}\n');
+    runner.printUsage();
+    exit(1);
   } on Exception catch (e) {
     stderr.writeln('Error: $e');
     exit(1);
   } finally {
-    repository.close();
+    closeRepository();
   }
 
   exit(0); // otherwise the async calls can cause the process to hang

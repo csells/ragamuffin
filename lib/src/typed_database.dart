@@ -7,10 +7,10 @@ class TypedQuery<T> {
 
   /// The SQL query string
   final String sql;
-  
+
   /// The query parameters
   final List<Object?> params;
-  
+
   /// Function to deserialize database rows to type T
   final T Function(Map<String, Object?>) deserializer;
 }
@@ -52,7 +52,7 @@ sealed class DatabaseResult<T> {
 class Success<T> extends DatabaseResult<T> {
   /// Creates a success result with data
   const Success(this.data);
-  
+
   /// The result data
   final T data;
 }
@@ -67,7 +67,7 @@ class NotFound<T> extends DatabaseResult<T> {
 class DatabaseError<T> extends DatabaseResult<T> {
   /// Creates an error result with message
   const DatabaseError(this.message);
-  
+
   /// The error message
   final String message;
 }
