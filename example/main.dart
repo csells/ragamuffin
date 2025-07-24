@@ -1,5 +1,8 @@
 // ignore_for_file: avoid_print
 
+// TODO: turn with these techniques:
+// https://blog.stackademic.com/this-custom-ai-reads-1-000s-of-pdfs-and-answers-like-a-human-heres-how-i-built-it-fce2132eabde
+
 import 'dart:io';
 
 import 'package:args/command_runner.dart';
